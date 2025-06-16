@@ -80,9 +80,9 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['ADDK',  { operands: [OperandType.Constant, OperandType.Register], syntax: "ADDK K, Rd", opcode: "0001 00KK KKKR DDDD", hasOptionalFieldSize: true }],
     ['ADDXY', { operands: [OperandType.Register, OperandType.Register], syntax: "ADDXY Rs, Rd", opcode: "1110 000S SSSR DDDD", requireSameRegisterPage: true }],
     ['AND',   { operands: [OperandType.Register, OperandType.Register], syntax: "AND Rs, Rd", opcode: "0101 000S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
-    ['ANDI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "ANDI IL, Rd", opcode: "0000 1011 100R DDDD", hasOptionalFieldSize: true }],
+    ['ANDI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "ANDI IL, Rd", opcode: "0000 1011 100R DDDD" }],
     ['ANDN',  { operands: [OperandType.Register, OperandType.Register], syntax: "ANDN Rs, Rd", opcode: "0101 001S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
-    ['ANDNI', { operands: [OperandType.Immediate, OperandType.Register], syntax: "ANDNI IL, Rd", opcode: "0000 1011 100R DDDD", hasOptionalFieldSize: true }],
+    ['ANDNI', { operands: [OperandType.Immediate, OperandType.Register], syntax: "ANDNI IL, Rd", opcode: "0000 1011 100R DDDD" }],
     ['BTST',  { operands: [OperandType.RegisterOrConstant, OperandType.Register], syntax: "BTST K/Rs, Rd", opcode: "K: 0000 0111 01~K KKKR DDDD\nRs: 0100 101S SSSR DDDD" }],
     ['CLR',   { operands: [OperandType.Register], syntax: "CLR Rd", opcode: "0101 0110 0R DDDD", hasOptionalFieldSize: true }],
     ['CLRC',  { operands: [], syntax: "CLRC", opcode: "0000 0011 0010 0000" }],
@@ -116,7 +116,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['MMFM',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MMFM Rs, [List]", opcode: "0000 1001 101R DDDD" }],
     ['MMTM',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MMTM Rs, [List]", opcode: "0000 1001 100R DDDD" }],
     ['MOVB',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MOVB src, dest", opcode: "(various)" }],
-    ['MOVI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "MOVI IW/IL, Rd", opcode: "IW: 0000 1001 110R DDDD\nIL: 0000 1001 111R DDDD" }],
+    ['MOVI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "MOVI IW/IL, Rd", hasOptionalFieldSize:true, opcode: "IW: 0000 1001 110R DDDD\nIL: 0000 1001 111R DDDD" }],
     ['MOVK',  { operands: [OperandType.Constant, OperandType.Register], syntax: "MOVK K, Rd", opcode: "0001 10KK KKKR DDDD" }],
     ['MOVX',  { operands: [OperandType.Register, OperandType.Register], syntax: "MOVX Rs, Rd", opcode: "1110 11MS SSSR DDDD", requireSameRegisterPage: true }],
     ['MOVY',  { operands: [OperandType.Register, OperandType.Register], syntax: "MOVY Rs, Rd", opcode: "1110 11MS SSSR DDDD", requireSameRegisterPage: true }],
@@ -358,28 +358,34 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
             const rule = INSTRUCTION_RULES.get(mnemonic)!;
             let operandStr = parts.slice(1).join(' ');
             
-            const specifierMatch = operandStr.match(/(.*),\s*([WL])$/i);
-            if (specifierMatch) {
-                operandStr = specifierMatch[1];
+            // Smarter operand parsing
+            const operandParts = operandStr.split(',').map(s => s.trim());
+            let operands: string[] = [];
+            let fieldSize : string | null = null;
+            
+            if (rule.hasOptionalFieldSize && operandParts.length > rule.operands.length) {
+                const lastPart = operandParts[operandParts.length - 1];
+                if (lastPart.match(/^\d+$/)) {
+                    fieldSize = lastPart;
+                    operands = operandParts.slice(0, -1);
+                } else {
+                    operands = operandParts;
+                }
+            } else {
+                operands = operandParts;
             }
 
-            let fieldSize : string | null = null;
-            if(rule.hasOptionalFieldSize) {
-                 const fieldSizeMatch = operandStr.match(/(.*),\s*(\d+)$/);
-                 if(fieldSizeMatch) {
-                     operandStr = fieldSizeMatch[1];
-                     fieldSize = fieldSizeMatch[2];
-                     const fieldVal = parseInt(fieldSize, 10);
-                      if (fieldVal < 0 || fieldVal > 31) {
-                         let fsStartIndex = lineWithoutComment.lastIndexOf(fieldSize);
-                         if (fsStartIndex === -1) fsStartIndex = line.firstNonWhitespaceCharacterIndex;
-                         const range = new vscode.Range(lineIndex, fsStartIndex, lineIndex, fsStartIndex + fieldSize.length);
-                         diagnostics.push(new vscode.Diagnostic(range, `Invalid Field Size. Must be between 0 and 31.`, vscode.DiagnosticSeverity.Error));
-                    }
-                 }
+            operands = operands.filter(s => s.length > 0);
+
+            if(fieldSize){
+                const fieldVal = parseInt(fieldSize, 10);
+                if (fieldVal < 0 || fieldVal > 31) {
+                    let fsStartIndex = lineWithoutComment.lastIndexOf(fieldSize);
+                    if (fsStartIndex === -1) fsStartIndex = line.firstNonWhitespaceCharacterIndex;
+                    const range = new vscode.Range(lineIndex, fsStartIndex, lineIndex, fsStartIndex + fieldSize.length);
+                    diagnostics.push(new vscode.Diagnostic(range, `Invalid Field Size. Must be between 0 and 31.`, vscode.DiagnosticSeverity.Error));
+                }
             }
-            
-            const operands = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
             
             const minOps = rule.minOperands ?? rule.operands.length;
             if (operands.length < minOps || operands.length > rule.operands.length) {
