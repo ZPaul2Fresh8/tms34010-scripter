@@ -20,6 +20,7 @@ interface InstructionRule {
     opcode: string;
     hasOptionalFieldSize?: boolean;
     requireSameRegisterPage?: boolean;
+    minOperands?: number;
 }
 
 // --- Validation Helper Functions ---
@@ -64,8 +65,8 @@ const isAddress = (op: string): boolean => {
         return isLabelFormat(subOperand) || isConstant(subOperand);
     }
     // Indirect address: *A0, -*A0, *A0+, *A0(10), *A0(LABEL)
-    const indirectMatch = op.match(/^(\*|-)?(A[0-9]{1,2}|B[0-9]{1,2}|SP|FP)(\(.+\))?(\+)?$/i);
-    return !!indirectMatch;
+    const indirectRegex = /^(-?\*|\*)((A|B)\d{1,2}|SP|FP)(\(.+\)|\+)?$/i;
+    return indirectRegex.test(op);
 };
 
 
@@ -102,7 +103,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['OR',    { operands: [OperandType.Register, OperandType.Register], syntax: "OR Rs, Rd", opcode: "0101 010S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
     ['ORI',   { operands: [OperandType.Immediate, OperandType.Register], syntax: "ORI IL, Rd", opcode: "0000 1011 101R DDDD", hasOptionalFieldSize: true }],
     ['SETC',  { operands: [], syntax: "SETC", opcode: "0000 1101 1110 0000" }],
-    ['SEXT',  { operands: [OperandType.Register], syntax: "SEXT Rd, F", opcode: "0000 1101 F100 000R DDDD", hasOptionalFieldSize: true }],
+    ['SEXT',  { operands: [OperandType.Register, OperandType.Constant], syntax: "SEXT Rd, F", opcode: "0000 1101 F100 000R DDDD", minOperands: 1 }],
     ['SUB',   { operands: [OperandType.Register, OperandType.Register], syntax: "SUB Rs, Rd", opcode: "0100 010S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
     ['SUBB',  { operands: [OperandType.Register, OperandType.Register], syntax: "SUBB Rs, Rd", opcode: "0100 011S SSSR DDDD", requireSameRegisterPage: true }],
     ['SUBI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "SUBI IW/IL, Rd", opcode: "IW: 0000 0011 0101 0R DDDD\nIL: 0000 0011 0111 0R DDDD", hasOptionalFieldSize: true }],
@@ -110,7 +111,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['SUBXY', { operands: [OperandType.Register, OperandType.Register], syntax: "SUBXY Rs, Rd", opcode: "1110 001S SSSR DDDD", requireSameRegisterPage: true }],
     ['XOR',   { operands: [OperandType.Register, OperandType.Register], syntax: "XOR Rs, Rd", opcode: "0101 011S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
     ['XORI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "XORI IL, Rd", opcode: "0000 1011 1101 0R DDDD", hasOptionalFieldSize: true }],
-    ['ZEXT',  { operands: [OperandType.Register], syntax: "ZEXT Rd, F", opcode: "0000 1101 F100 001R DDDD", hasOptionalFieldSize: true }],
+    ['ZEXT',  { operands: [OperandType.Register, OperandType.Constant], syntax: "ZEXT Rd, F", opcode: "0000 1101 F100 001R DDDD", minOperands: 1 }],
     ['MOVE',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MOVE src, dest", opcode: "(various)", hasOptionalFieldSize: true }],
     ['MMFM',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MMFM Rs, [List]", opcode: "0000 1001 101R DDDD" }],
     ['MMTM',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MMTM Rs, [List]", opcode: "0000 1001 100R DDDD" }],
@@ -141,7 +142,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['PUSHST',{ operands: [], syntax: "PUSHST", opcode: "0000 0001 1110 0000" }],
     ['PUTST', { operands: [OperandType.Register], syntax: "PUTST Rs", opcode: "0000 0001 101R DDDD" }],
     ['RETI',  { operands: [], syntax: "RETI", opcode: "0000 1001 0100 0000" }],
-    ['RETS',  { operands: [OperandType.Constant], syntax: "RETS [N]", opcode: "0000 1001 011N NNNN" }],
+    ['RETS',  { operands: [OperandType.Constant], syntax: "RETS [N]", opcode: "0000 1001 011N NNNN", minOperands: 0 }],
     ['REV',   { operands: [OperandType.Register], syntax: "REV Rd", opcode: "0000 0000 001R DDDD" }],
     ['SETF',  { operands: [OperandType.Constant, OperandType.Constant, OperandType.Constant], syntax: "SETF FS, FE, F", opcode: "0000 0111 01(FS)(FE)(F)0 0000" }],
     ['TRAP',  { operands: [OperandType.Constant], syntax: "TRAP N", opcode: "0000 1001 000N NNNN" }],
@@ -275,53 +276,38 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
         const parts = text.split(/\s+/);
         const mnemonic = parts[0].toUpperCase();
         
-        // Special validation for MOVE with predecrement addressing
-        const movePreDecMatch = text.match(/^(MOVE)\s+([a-zA-Z0-9]+)\s*,\s*(-\*[a-zA-Z0-9]+)\s*,\s*(\d+)$/i);
-        if (movePreDecMatch) {
-            const [, , rs, dest, field] = movePreDecMatch;
-            if (!isRegister(rs)) {
-                 const range = new vscode.Range(lineIndex, lineWithoutComment.indexOf(rs), lineIndex, lineWithoutComment.indexOf(rs) + rs.length);
-                 diagnostics.push(new vscode.Diagnostic(range, `Invalid source register '${rs}' for MOVE.`, vscode.DiagnosticSeverity.Error));
-            }
-            const fieldVal = parseInt(field, 10);
-            if (fieldVal < 0 || fieldVal > 31) {
-                const range = new vscode.Range(lineIndex, lineWithoutComment.lastIndexOf(field), lineIndex, lineWithoutComment.lastIndexOf(field) + field.length);
-                diagnostics.push(new vscode.Diagnostic(range, `Invalid Field Size. Must be between 0 and 31.`, vscode.DiagnosticSeverity.Error));
-            }
-            continue; // Skip other validation for this specific MOVE form
-        }
-        
         if (KNOWN_INSTRUCTIONS.has(mnemonic)) {
             const rule = INSTRUCTION_RULES.get(mnemonic)!;
             let operandStr = parts.slice(1).join(' ');
-            
-            if (rule.hasOptionalFieldSize) {
-                const fieldSizeMatch = operandStr.match(/(.*),\s*(\d+)$/);
-                if (fieldSizeMatch) {
-                    operandStr = fieldSizeMatch[1];
-                    const fieldSize = parseInt(fieldSizeMatch[2], 10);
-                    if (fieldSize < 0 || fieldSize > 31) {
-                         let fsStartIndex = lineWithoutComment.lastIndexOf(fieldSizeMatch[2]);
-                         if (fsStartIndex === -1) fsStartIndex = line.firstNonWhitespaceCharacterIndex;
-                         const range = new vscode.Range(lineIndex, fsStartIndex, lineIndex, fsStartIndex + fieldSizeMatch[2].length);
-                         diagnostics.push(new vscode.Diagnostic(range, `Invalid Field Size. Must be between 0 and 31.`, vscode.DiagnosticSeverity.Error));
-                    }
-                }
-            }
             
             const specifierMatch = operandStr.match(/(.*),\s*([WL])$/i);
             if (specifierMatch) {
                 operandStr = specifierMatch[1];
             }
+
+            let fieldSize : string | null = null;
+            if(rule.hasOptionalFieldSize) {
+                 const fieldSizeMatch = operandStr.match(/(.*),\s*(\d+)$/);
+                 if(fieldSizeMatch) {
+                     operandStr = fieldSizeMatch[1];
+                     fieldSize = fieldSizeMatch[2];
+                     const fieldVal = parseInt(fieldSize, 10);
+                      if (fieldVal < 0 || fieldVal > 31) {
+                         let fsStartIndex = lineWithoutComment.lastIndexOf(fieldSize);
+                         if (fsStartIndex === -1) fsStartIndex = line.firstNonWhitespaceCharacterIndex;
+                         const range = new vscode.Range(lineIndex, fsStartIndex, lineIndex, fsStartIndex + fieldSize.length);
+                         diagnostics.push(new vscode.Diagnostic(range, `Invalid Field Size. Must be between 0 and 31.`, vscode.DiagnosticSeverity.Error));
+                    }
+                 }
+            }
             
             const operands = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
             
-            if (rule.operands.length !== operands.length) {
-                 if (!(rule.operands.length - 1 === operands.length && rule.operands[rule.operands.length-1] === OperandType.Constant)) {
-                    const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, lineWithoutComment.trimRight().length);
-                    diagnostics.push(new vscode.Diagnostic(range, `Invalid operand count for ${mnemonic}. Expected ${rule.operands.length}, but got ${operands.length}.`, vscode.DiagnosticSeverity.Error));
-                    continue;
-                }
+            const minOps = rule.minOperands ?? rule.operands.length;
+            if (operands.length < minOps || operands.length > rule.operands.length) {
+                const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, lineWithoutComment.trimRight().length);
+                diagnostics.push(new vscode.Diagnostic(range, `Invalid operand count for ${mnemonic}. Expected ${minOps} to ${rule.operands.length}, but got ${operands.length}.`, vscode.DiagnosticSeverity.Error));
+                continue;
             }
             
             if (rule.requireSameRegisterPage && operands.length === 2) {
@@ -342,15 +328,9 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                 const checkLabel = (op: string) => isLabelFormat(op) && definedSymbols.has(op.toUpperCase());
 
                 switch (expectedType) {
-                    case OperandType.Register:
-                        isValid = isRegister(operandValue);
-                        break;
-                    case OperandType.Immediate:
-                        isValid = isConstant(operandValue) || checkLabel(operandValue);
-                        break;
-                    case OperandType.Constant:
-                        isValid = isConstant(operandValue);
-                        break;
+                    case OperandType.Register: isValid = isRegister(operandValue); break;
+                    case OperandType.Immediate: isValid = isConstant(operandValue) || checkLabel(operandValue); break;
+                    case OperandType.Constant: isValid = isConstant(operandValue); break;
                     case OperandType.Label:
                         isValid = checkLabel(operandValue);
                         if (isLabelFormat(operandValue) && !isValid) {
@@ -359,18 +339,10 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                             continue; // Skip generic error
                         }
                         break;
-                    case OperandType.Address:
-                        isValid = isAddress(operandValue);
-                        break;
-                    case OperandType.Addressable:
-                        isValid = isRegister(operandValue) || isAddress(operandValue);
-                        break;
-                    case OperandType.RegisterOrConstant:
-                        isValid = isRegister(operandValue) || isConstant(operandValue);
-                        break;
-                    case OperandType.RegisterOrLabel:
-                        isValid = isRegister(operandValue) || checkLabel(operandValue);
-                        break;
+                    case OperandType.Address: isValid = isAddress(operandValue); break;
+                    case OperandType.Addressable: isValid = isRegister(operandValue) || isAddress(operandValue); break;
+                    case OperandType.RegisterOrConstant: isValid = isRegister(operandValue) || isConstant(operandValue); break;
+                    case OperandType.RegisterOrLabel: isValid = isRegister(operandValue) || checkLabel(operandValue); break;
                 }
                 
                 if (!isValid) {
