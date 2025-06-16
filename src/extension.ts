@@ -150,7 +150,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['DSJNE', { operands: [OperandType.Register, OperandType.Label], syntax: "DSJNE Rd, Address", opcode: "0000 1101 1100 DDDD" }],
     ['DSJS',  { operands: [OperandType.Register, OperandType.Label], syntax: "DSJS Rd, Address", opcode: "0011 1Dxx xxx0 DDDD" }],
     ['JUMP',  { operands: [OperandType.Register], syntax: "JUMP Rs", opcode: "0000 0001 011R SSSS" }],
-    ...['JRP', 'JRLS', 'JRLT', 'JRLE', 'JREQ', 'JRNE', 'JRGT', 'JRGE', 'JRHI', 'JRCC', 'JRCS', 'JRVC', 'JRVS', 'JRPL', 'JRMI', 'JRUC', 'JRN', 'JRNN', 'JRC', 'JRNC', 'JRZ', 'JRNZ'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc oooooooo"}] as [string, InstructionRule]),
+    ...['JRP', 'JRLS', 'JRLT', 'JRLE', 'JREQ', 'JRNE', 'JRGT', 'JRGE', 'JRHI', 'JRCC', 'JRCS', 'JRVC', 'JRVS', 'JRPL', 'JRMI', 'JRUC'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc oooooooo"}] as [string, InstructionRule]),
     ['JR', {operands: [OperandType.Label], syntax: `JR Address`, opcode: "1100 cccc oooooooo"}],
     ...['JAP', 'JALS', 'JALT', 'JALE', 'JAEQ', 'JANE', 'JAGT', 'JAGE', 'JAHI', 'JACC', 'JACS', 'JAVC', 'JAVS', 'JAPL', 'JAMI', 'JAUC'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc 10000000"}] as [string, InstructionRule]),
     ['JA', {operands: [OperandType.Label], syntax: `JA Address`, opcode: "1100 cccc 10000000"}],
@@ -274,6 +274,22 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
 
         const parts = text.split(/\s+/);
         const mnemonic = parts[0].toUpperCase();
+        
+        // Special validation for MOVE with predecrement addressing
+        const movePreDecMatch = text.match(/^(MOVE)\s+([a-zA-Z0-9]+)\s*,\s*(-\*[a-zA-Z0-9]+)\s*,\s*(\d+)$/i);
+        if (movePreDecMatch) {
+            const [, , rs, dest, field] = movePreDecMatch;
+            if (!isRegister(rs)) {
+                 const range = new vscode.Range(lineIndex, lineWithoutComment.indexOf(rs), lineIndex, lineWithoutComment.indexOf(rs) + rs.length);
+                 diagnostics.push(new vscode.Diagnostic(range, `Invalid source register '${rs}' for MOVE.`, vscode.DiagnosticSeverity.Error));
+            }
+            const fieldVal = parseInt(field, 10);
+            if (fieldVal < 0 || fieldVal > 31) {
+                const range = new vscode.Range(lineIndex, lineWithoutComment.lastIndexOf(field), lineIndex, lineWithoutComment.lastIndexOf(field) + field.length);
+                diagnostics.push(new vscode.Diagnostic(range, `Invalid Field Size. Must be between 0 and 31.`, vscode.DiagnosticSeverity.Error));
+            }
+            continue; // Skip other validation for this specific MOVE form
+        }
         
         if (KNOWN_INSTRUCTIONS.has(mnemonic)) {
             const rule = INSTRUCTION_RULES.get(mnemonic)!;
