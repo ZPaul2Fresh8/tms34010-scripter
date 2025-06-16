@@ -10,6 +10,7 @@ enum OperandType {
     RegisterOrConstant,
     RegisterOrLabel,
     Addressable, // Represents a register or a memory address
+    Flag,        // Represents a 0 or 1 flag
     None
 }
 
@@ -53,6 +54,8 @@ const isConstant = (op: string): boolean => {
     
     return false;
 };
+
+const isFlag = (op: string): boolean => op === '0' || op === '1';
 
 // Checks if a string has the format of a label (doesn't check if defined)
 const isLabelFormat = (op: string): boolean => {
@@ -128,7 +131,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['OR',    { operands: [OperandType.Register, OperandType.Register], syntax: "OR Rs, Rd", opcode: "0101 010S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true, description: "Logical OR of two registers." }],
     ['ORI',   { operands: [OperandType.Immediate, OperandType.Register], syntax: "ORI IL, Rd", opcode: "0000 1011 101R DDDD", hasOptionalFieldSize: true, description: "Logical OR of immediate value and register." }],
     ['SETC',  { operands: [], syntax: "SETC", opcode: "0000 1101 1110 0000", description: "Set the Carry (C) bit in the status register." }],
-    ['SEXT',  { operands: [OperandType.Register, OperandType.Constant], syntax: "SEXT Rd, F", opcode: "0000 1101 F100 000R DDDD", minOperands: 1, description: "Sign extend a field within a register." }],
+    ['SEXT',  { operands: [OperandType.Register, OperandType.Flag], syntax: "SEXT Rd, F", opcode: "0000 1101 F100 000R DDDD", minOperands: 1, description: "Sign extend a field within a register." }],
     ['SUB',   { operands: [OperandType.Register, OperandType.Register], syntax: "SUB Rs, Rd", opcode: "0100 010S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true, description: "Subtract source register from destination." }],
     ['SUBB',  { operands: [OperandType.Register, OperandType.Register], syntax: "SUBB Rs, Rd", opcode: "0100 011S SSSR DDDD", requireSameRegisterPage: true, description: "Subtract registers with borrow." }],
     ['SUBI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "SUBI IW/IL, Rd", opcode: "IW: 0000 0011 0101 0R DDDD\nIL: 0000 0011 0111 0R DDDD", hasOptionalFieldSize: true, description: "Subtract immediate value from register." }],
@@ -136,7 +139,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['SUBXY', { operands: [OperandType.Register, OperandType.Register], syntax: "SUBXY Rs, Rd", opcode: "1110 001S SSSR DDDD", requireSameRegisterPage: true, description: "Subtract corresponding X and Y halves of two registers." }],
     ['XOR',   { operands: [OperandType.Register, OperandType.Register], syntax: "XOR Rs, Rd", opcode: "0101 011S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true, description: "Logical XOR of two registers." }],
     ['XORI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "XORI IL, Rd", opcode: "0000 1011 1101 0R DDDD", hasOptionalFieldSize: true, description: "Logical XOR of immediate value and register." }],
-    ['ZEXT',  { operands: [OperandType.Register, OperandType.Constant], syntax: "ZEXT Rd, F", opcode: "0000 1101 F100 001R DDDD", minOperands: 1, description: "Zero extend a field within a register." }],
+    ['ZEXT',  { operands: [OperandType.Register, OperandType.Flag], syntax: "ZEXT Rd, F", opcode: "0000 1101 F100 001R DDDD", minOperands: 1, description: "Zero extend a field within a register." }],
     ['MOVE',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MOVE src, dest", opcode: "(various)", hasOptionalFieldSize: true, description: "Move data between registers and/or memory." }],
     ['MMFM',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MMFM Rs, [List]", opcode: "0000 1001 101R DDDD", description: "Move multiple registers from memory." }],
     ['MMTM',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MMTM Rs, [List]", opcode: "0000 1001 100R DDDD", description: "Move multiple registers to memory." }],
@@ -149,7 +152,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['CVXYL',  { operands: [OperandType.Register, OperandType.Register], syntax: "CVXYL Rs, Rd", opcode: "1110 100S SSSR DDDD", requireSameRegisterPage: true, description: "Convert XY address to linear address." }],
     ['DRAV',   { operands: [OperandType.Register, OperandType.Register], syntax: "DRAV Rs, Rd", opcode: "1111 011S SSSR DDDD", requireSameRegisterPage: true, description: "Draw and advance." }],
     ['FILL',   { operands: [OperandType.Label], syntax: "FILL L | FILL XY", opcode: "L: 0000 1111 1100 0000\nXY: 0000 1111 1110 0000", description: "Fill a pixel array." }],
-    ['LINE',   { operands: [], syntax: "LINE [0|1]", opcode: "0: 0DF1Ah\n1: 0DF9Ah", description: "Initiate a line draw operation." }],
+    ['LINE',   { operands: [OperandType.Flag], syntax: "LINE [0|1]", opcode: "0: 0DF1Ah\n1: 0DF9Ah", minOperands: 0, description: "Initiate a line draw operation." }],
     ['PIXBLT', { operands: [OperandType.Label, OperandType.Label], syntax: "PIXBLT mode, mode", opcode: "(various)", description: "Pixel Block Transfer." }],
     ['PIXT',   { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "PIXT src, dest", opcode: "(various)", description: "Pixel Transfer." }],
     ['CALL',  { operands: [OperandType.RegisterOrLabel], syntax: "CALL Rs | CALL Label", opcode: "0000 1001 001R DDDD", description: "Call a subroutine." }],
@@ -464,6 +467,7 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                     case OperandType.Register: isValid = isRegister(operandValue); break;
                     case OperandType.Immediate: isValid = isConstant(operandValue) || checkLabel(operandValue); break;
                     case OperandType.Constant: isValid = isConstant(operandValue); break;
+                    case OperandType.Flag: isValid = isFlag(operandValue); break;
                     case OperandType.Label:
                         isValid = checkLabel(operandValue);
                         if (isLabelFormat(operandValue) && !isValid) {
