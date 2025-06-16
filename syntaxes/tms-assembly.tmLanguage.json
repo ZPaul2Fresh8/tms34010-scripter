@@ -1,0 +1,56 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "TMS34010 Assembly",
+    "scopeName": "source.asm.tms",
+    "patterns": [
+        { "include": "#comments" },
+        { "include": "#keywords" },
+        { "include": "#directives" },
+        { "include": "#registers" },
+        { "include": "#strings" },
+        { "include": "#labels" }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [{
+                "name": "comment.line.semicolon.asm",
+                "match": ";.*"
+            }]
+        },
+        "keywords": {
+            "patterns": [{
+                "name": "keyword.control.asm",
+                "match": "(?i)\\b(ABS|ADD|ADDC|ADDI|ADDK|ADDXY|AND|ANDI|ANDN|ANDNI|BTST|CLR|CLRC|CMP|CMPI|CMPXY|DEC|DIVS|DIVU|LMO|MODS|MODU|MPYS|MPYU|NEG|NEGB|NOT|OR|ORI|SETC|SEXT|SUB|SUBB|SUBI|SUBK|SUBXY|XOR|XORI|ZEXT|MMFM|MMTM|MOVE|MOVB|MOVBI|MOVI|MOVK|MOVX|MOVY|RL|SLA|SLL|SRA|SRL|CALL|CALLA|CALLR|RETI|RETS|DSJ|DSJEQ|DSJNE|DSJS|JUMP|JRP|JRLS|JRLT|JRLE|JREQ|JRNE|JRGT|JRGE|JRHI|JRCC|JRCS|JRVC|JRVS|JRPL|JRMI|JRUC|JR|JRN|JRNN|JRC|JRNC|JRZ|JRNZ|JAP|JALS|JALT|JALE|JAEQ|JANE|JAGT|JAGE|JAHI|JACC|JACS|JAVC|JAVS|JAPL|JAMI|JAUC|PUSHST|POPST|PIXBLT|FILL|LINE|DRAV|PIXT|CPW|CVXYL|EXGF|EXGPC|GETPC|GETST|NOP|PUTST|REV|TRAP|DINT|EINT|EMU|TEST|SETF)\\b"
+            }]
+        },
+        "directives": {
+            "patterns": [{
+                "name": "keyword.directive.asm",
+                "match": "(?i)\\.(include|set|equ|word|long|string|asciiz|byte|field|sint|float|sect|bss|text|data|align|space|global|globl|end|org|def|ref|newblock|cdef|endcdef|clink|cstruct|endstruct|struct|union|tag|eval|emsg|wmsg|fclist|fcnolist|drlist|drnolist|mlist|mnolist|sslist|ssnolist|var|label|version|length|width|option|if|else|endif)\\b"
+            }]
+        },
+        "registers": {
+            "patterns": [{
+                "name": "variable.language.register.asm",
+                "match": "(?i)\\b(A[0-9]{1,2}|B[0-9]{1,2}|SP|FP|ST|PC|IOSTAT|CTRL1|CTRL2|HSTADR|HSTDATA|HSTCTL|INTPEND|INTENB|DPYCTL|DPYSTRT|DPYADR|VCOUNT|HCOUNT|PFILL|PLINE|CONVSP|CONVDP|PSIZE|PMOVE|SADDR|SCOUNT|DADDR|DCOUNT|OFFSET|WINDOW|WSTART|WEND|DYDX|COLOR0|COLOR1)\\b"
+            }]
+        },
+        "strings": {
+            "name": "string.quoted.double.asm",
+            "begin": "\"",
+            "end": "\"",
+            "patterns": [
+                {
+                    "name": "constant.character.escape.asm",
+                    "match": "\\\\."
+                }
+            ]
+        },
+        "labels": {
+            "patterns": [{
+                "name": "entity.name.function.label.asm",
+                "match": "^[a-zA-Z_][a-zA-Z0-9_]*:"
+            }]
+        }
+    }
+}
