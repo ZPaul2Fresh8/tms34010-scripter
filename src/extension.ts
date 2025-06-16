@@ -136,7 +136,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['DSJS',  { operands: [OperandType.Register, OperandType.Label], syntax: "DSJS Rd, Address", opcode: "0011 1Dxx xxx0 DDDD" }],
     ['JUMP',  { operands: [OperandType.Register], syntax: "JUMP Rs", opcode: "0000 0001 011R SSSS" }],
     ...['JRP', 'JRLS', 'JRLT', 'JRLE', 'JREQ', 'JRNE', 'JRGT', 'JRGE', 'JRHI', 'JRCC', 'JRCS', 'JRVC', 'JRVS', 'JRPL', 'JRMI', 'JRUC', 'JR', 'JRN', 'JRNN', 'JRC', 'JRNC', 'JRZ', 'JRNZ'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc oooooooo"}] as [string, InstructionRule]),
-    ...['JAP', 'JALS', 'JALT', 'JALE', 'JAEQ', 'JANE', 'JAGT', 'JAGE', 'JAHI', 'JACC', 'JACS', 'JAVC', 'JAVS', 'JAPL', 'JAMI', 'JAUC'].map(j => [j, {operands: [OperandType.Address], syntax: `${j} @Address`, opcode: "1100 cccc 10000000"}] as [string, InstructionRule]),
+    ...['JAP', 'JALS', 'JALT', 'JALE', 'JAEQ', 'JANE', 'JAGT', 'JAGE', 'JAHI', 'JACC', 'JACS', 'JAVC', 'JAVS', 'JAPL', 'JAMI', 'JAUC', 'JA'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc 10000000"}] as [string, InstructionRule]),
     ...['RL', 'SLA', 'SLL', 'SRA', 'SRL'].map(s => [s, {operands: [OperandType.RegisterOrConstant, OperandType.Register], syntax: `${s} K/Rs, Rd`, opcode: `K: 001x xxKK KKK0 DDDD\nRs: 0110 xx0S SSSR DDDD`, hasOptionalFieldSize: true, requireSameRegisterPage: true }] as [string, InstructionRule])
 ]);
 
@@ -238,6 +238,15 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                 }
             }
         }
+        
+        const globalMatch = text.trim().match(/^\.(global|globl)\s+([a-zA-Z_][a-zA-Z0-9_]+)/i);
+        if (globalMatch) {
+            const symbolName = globalMatch[2].toUpperCase();
+            const currentRange = symbolRange(globalMatch[2]);
+            if (currentRange && !definedSymbols.has(symbolName)) {
+                definedSymbols.set(symbolName, currentRange);
+            }
+        }
     }
 
     // Second pass: validate instructions
@@ -306,18 +315,20 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                 const expectedType = rule.operands[i];
                 let isValid = false;
 
+                const checkLabel = (op: string) => isLabelFormat(op) && definedSymbols.has(op.toUpperCase());
+
                 switch (expectedType) {
                     case OperandType.Register:
                         isValid = isRegister(operandValue);
                         break;
                     case OperandType.Immediate:
-                        isValid = isConstant(operandValue) || isLabelFormat(operandValue);
+                        isValid = isConstant(operandValue) || checkLabel(operandValue);
                         break;
                     case OperandType.Constant:
                         isValid = isConstant(operandValue);
                         break;
                     case OperandType.Label:
-                        isValid = isLabelFormat(operandValue) && definedSymbols.has(operandValue.toUpperCase());
+                        isValid = checkLabel(operandValue);
                         if (isLabelFormat(operandValue) && !isValid) {
                             const range = new vscode.Range(lineIndex, lineWithoutComment.indexOf(operandValue), lineIndex, lineWithoutComment.indexOf(operandValue) + operandValue.length);
                             diagnostics.push(new vscode.Diagnostic(range, `Undefined label: '${operandValue}'`, vscode.DiagnosticSeverity.Error));
@@ -334,7 +345,7 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                         isValid = isRegister(operandValue) || isConstant(operandValue);
                         break;
                     case OperandType.RegisterOrLabel:
-                        isValid = isRegister(operandValue) || isLabelFormat(operandValue);
+                        isValid = isRegister(operandValue) || checkLabel(operandValue);
                         break;
                 }
                 
