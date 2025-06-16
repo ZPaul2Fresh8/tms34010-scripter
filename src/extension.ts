@@ -176,6 +176,59 @@ const DIAGNOSTIC_COLLECTION = vscode.languages.createDiagnosticCollection('tms34
 
 export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
+        vscode.languages.registerCompletionItemProvider('tms-assembly', {
+            provideCompletionItems(document, position) {
+                const line = document.lineAt(position);
+                const linePrefix = line.text.substr(0, position.character);
+                const trimmedPrefix = linePrefix.trimLeft();
+                
+                // If we are at the beginning of a non-whitespace line part
+                if (trimmedPrefix.length === linePrefix.length && !trimmedPrefix.includes(' ')) {
+                    return Array.from(KNOWN_INSTRUCTIONS).map(instr => {
+                        return new vscode.CompletionItem(instr, vscode.CompletionItemKind.Keyword);
+                    });
+                }
+                
+                // If we are typing an operand
+                const parts = trimmedPrefix.split(/\s*,\s*|\s+/);
+                const mnemonic = parts[0].toUpperCase();
+                
+                if (INSTRUCTION_RULES.has(mnemonic)) {
+                    const rule = INSTRUCTION_RULES.get(mnemonic)!;
+                    const currentOperandIndex = parts.length - 2;
+
+                    if (currentOperandIndex < rule.operands.length) {
+                        const expectedType = rule.operands[currentOperandIndex];
+                        switch (expectedType) {
+                            case OperandType.Register:
+                            case OperandType.RegisterOrConstant:
+                            case OperandType.RegisterOrLabel:
+                            case OperandType.Addressable:
+                                return Array.from(TMS34010_REGISTERS).map(reg => {
+                                    return new vscode.CompletionItem(reg, vscode.CompletionItemKind.Variable);
+                                });
+                            case OperandType.Label:
+                            case OperandType.Immediate:
+                                const labels = [];
+                                for (let i = 0; i < document.lineCount; i++) {
+                                    const text = document.lineAt(i).text;
+                                    const labelMatch = text.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*):/);
+                                    if (labelMatch) {
+                                        labels.push(new vscode.CompletionItem(labelMatch[1], vscode.CompletionItemKind.Reference));
+                                    }
+                                }
+                                return labels;
+                        }
+                    }
+                }
+                
+                return undefined;
+            }
+        },
+        ' ', ',') // Trigger characters
+    );
+    
+    context.subscriptions.push(
         vscode.languages.registerHoverProvider('tms-assembly', {
             provideHover(document, position, token) {
                 const range = document.getWordRangeAtPosition(position);
