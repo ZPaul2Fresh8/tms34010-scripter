@@ -177,47 +177,72 @@ const DIAGNOSTIC_COLLECTION = vscode.languages.createDiagnosticCollection('tms34
 export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.languages.registerCompletionItemProvider('tms-assembly', {
-            provideCompletionItems(document, position) {
+            provideCompletionItems(document, position, token, context) {
                 const line = document.lineAt(position);
                 const linePrefix = line.text.substr(0, position.character);
                 const trimmedPrefix = linePrefix.trimLeft();
-                
-                // If we are at the beginning of a non-whitespace line part
+
+                // If at the very beginning of a non-whitespace line part
                 if (trimmedPrefix.length === linePrefix.length && !trimmedPrefix.includes(' ')) {
-                    return Array.from(KNOWN_INSTRUCTIONS).map(instr => {
-                        return new vscode.CompletionItem(instr, vscode.CompletionItemKind.Keyword);
-                    });
+                    return Array.from(KNOWN_INSTRUCTIONS).map(instr =>
+                        new vscode.CompletionItem(instr, vscode.CompletionItemKind.Keyword)
+                    );
                 }
                 
-                // If we are typing an operand
-                const parts = trimmedPrefix.split(/\s*,\s*|\s+/);
+                const parts = trimmedPrefix.split(/[\s,]+/);
                 const mnemonic = parts[0].toUpperCase();
                 
                 if (INSTRUCTION_RULES.has(mnemonic)) {
                     const rule = INSTRUCTION_RULES.get(mnemonic)!;
-                    const currentOperandIndex = parts.length - 2;
+                    const commaCount = (linePrefix.match(/,/g) || []).length;
 
+                    // Suggest Field Size
+                    if (rule.hasOptionalFieldSize && commaCount === rule.operands.length) {
+                        const items: vscode.CompletionItem[] = [];
+                        for (let i = 0; i <= 31; i++) {
+                            const item = new vscode.CompletionItem(String(i), vscode.CompletionItemKind.Constant);
+                            item.detail = `Field Size ${i}`;
+                            items.push(item);
+                        }
+                        return items;
+                    }
+                    
+                    const currentOperandIndex = commaCount;
                     if (currentOperandIndex < rule.operands.length) {
                         const expectedType = rule.operands[currentOperandIndex];
+                        
+                        const createRegisterSuggestions = () => Array.from(TMS34010_REGISTERS).map(reg => new vscode.CompletionItem(reg, vscode.CompletionItemKind.Variable));
+                        
+                        // Suggest registers if the user just typed '*'
+                        if(context.triggerCharacter === '*') {
+                            return createRegisterSuggestions();
+                        }
+
+                        const createLabelSuggestions = () => {
+                            const labels: vscode.CompletionItem[] = [];
+                            for (let i = 0; i < document.lineCount; i++) {
+                                const text = document.lineAt(i).text;
+                                const labelMatch = text.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*):/);
+                                const equateMatch = text.trim().match(/^([a-zA-Z_][a-zA-Z0-9_]+)\s+\.(equ|set)\s+/i);
+                                if (labelMatch) {
+                                    labels.push(new vscode.CompletionItem(labelMatch[1], vscode.CompletionItemKind.Reference));
+                                }
+                                if (equateMatch) {
+                                     labels.push(new vscode.CompletionItem(equateMatch[1], vscode.CompletionItemKind.Constant));
+                                }
+                            }
+                            return labels;
+                        };
+
                         switch (expectedType) {
                             case OperandType.Register:
                             case OperandType.RegisterOrConstant:
                             case OperandType.RegisterOrLabel:
                             case OperandType.Addressable:
-                                return Array.from(TMS34010_REGISTERS).map(reg => {
-                                    return new vscode.CompletionItem(reg, vscode.CompletionItemKind.Variable);
-                                });
+                                return createRegisterSuggestions();
                             case OperandType.Label:
                             case OperandType.Immediate:
-                                const labels = [];
-                                for (let i = 0; i < document.lineCount; i++) {
-                                    const text = document.lineAt(i).text;
-                                    const labelMatch = text.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*):/);
-                                    if (labelMatch) {
-                                        labels.push(new vscode.CompletionItem(labelMatch[1], vscode.CompletionItemKind.Reference));
-                                    }
-                                }
-                                return labels;
+                                return createLabelSuggestions();
                         }
                     }
                 }
@@ -225,7 +250,7 @@ export function activate(context: vscode.ExtensionContext) {
                 return undefined;
             }
         },
-        ' ', ',') // Trigger characters
+        ' ', ',', '*') // Trigger characters
     );
     
     context.subscriptions.push(
