@@ -25,15 +25,16 @@ This extension contributes the following settings:
 
 ## Known Issues
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+Jumps to labels not complete. Currently labels are defined by their name and a colon as a postfix. Thinking about changing this to NOT have the colon to follow existing code sources which use a tabbing to indicate code from labels which start at column 0.
+MMTM and MMFM no yet implemented as well as the less popular pixel blitter instructions.
 
 ## Release Notes
 
-Users appreciate release notes as you update your extension.
+Non-release.
 
 ### 1.0.0
 
-Initial release.
+WIP
 
 ---
 

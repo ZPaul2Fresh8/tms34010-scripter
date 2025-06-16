@@ -18,6 +18,7 @@ interface InstructionRule {
     operands: OperandType[];
     syntax: string;
     opcode: string;
+    description: string;
     hasOptionalFieldSize?: boolean;
     requireSameRegisterPage?: boolean;
     minOperands?: number;
@@ -59,103 +60,127 @@ const isLabelFormat = (op: string): boolean => {
 };
 
 const isAddress = (op: string): boolean => {
+    op = op.toUpperCase();
     // Absolute address: @>FFFF, @label
     if (op.startsWith('@')) {
         const subOperand = op.substring(1);
         return isLabelFormat(subOperand) || isConstant(subOperand);
     }
-    // Indirect address: *A0, -*A0, *A0+, *A0(10), *A0(LABEL)
-    const indirectRegex = /^(-?\*|\*)((A|B)\d{1,2}|SP|FP)(\(.+\)|\+)?$/i;
-    return indirectRegex.test(op);
+    
+    // Pre-decrement: -*A0
+    if (op.startsWith('-*')) {
+        const reg = op.substring(2);
+        return A_REGISTERS.has(reg) || B_REGISTERS.has(reg);
+    }
+    
+    if (op.startsWith('*')) {
+        // Post-increment: *A0+
+        if (op.endsWith('+')) {
+            const reg = op.substring(1, op.length - 1);
+            return A_REGISTERS.has(reg) || B_REGISTERS.has(reg);
+        }
+        
+        // With offset: *A0(10) or *A0(MY_LABEL)
+        const offsetMatch = op.match(/^\*(A[0-9]{1,2}|B[0-9]{1,2}|SP|FP)\((.+)\)$/);
+        if (offsetMatch) {
+            return true; 
+        }
+        
+        // Simple indirect: *A0
+        const reg = op.substring(1);
+        return A_REGISTERS.has(reg) || B_REGISTERS.has(reg);
+    }
+    
+    return false;
 };
 
 
 // A structured map of instructions and their validation rules
 const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     // Arithmetic, Logical, Compare
-    ['ABS',   { operands: [OperandType.Register], syntax: "ABS Rd", opcode: "0000 0011 100R DDDD" }],
-    ['ADD',   { operands: [OperandType.Register, OperandType.Register], syntax: "ADD Rs, Rd", opcode: "0100 000S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
-    ['ADDC',  { operands: [OperandType.Register, OperandType.Register], syntax: "ADDC Rs, Rd", opcode: "0100 001S SSSR DDDD", requireSameRegisterPage: true }],
-    ['ADDI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "ADDI IW/IL, Rd", opcode: "IW: 0000 1011 000R DDDD\nIL: 0000 1011 001R DDDD", hasOptionalFieldSize: true }],
-    ['ADDK',  { operands: [OperandType.Constant, OperandType.Register], syntax: "ADDK K, Rd", opcode: "0001 00KK KKKR DDDD", hasOptionalFieldSize: true }],
-    ['ADDXY', { operands: [OperandType.Register, OperandType.Register], syntax: "ADDXY Rs, Rd", opcode: "1110 000S SSSR DDDD", requireSameRegisterPage: true }],
-    ['AND',   { operands: [OperandType.Register, OperandType.Register], syntax: "AND Rs, Rd", opcode: "0101 000S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
-    ['ANDI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "ANDI IL, Rd", opcode: "0000 1011 100R DDDD" }],
-    ['ANDN',  { operands: [OperandType.Register, OperandType.Register], syntax: "ANDN Rs, Rd", opcode: "0101 001S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
-    ['ANDNI', { operands: [OperandType.Immediate, OperandType.Register], syntax: "ANDNI IL, Rd", opcode: "0000 1011 100R DDDD" }],
-    ['BTST',  { operands: [OperandType.RegisterOrConstant, OperandType.Register], syntax: "BTST K/Rs, Rd", opcode: "K: 0000 0111 01~K KKKR DDDD\nRs: 0100 101S SSSR DDDD" }],
-    ['CLR',   { operands: [OperandType.Register], syntax: "CLR Rd", opcode: "0101 0110 0R DDDD", hasOptionalFieldSize: true }],
-    ['CLRC',  { operands: [], syntax: "CLRC", opcode: "0000 0011 0010 0000" }],
-    ['CMP',   { operands: [OperandType.Register, OperandType.Register], syntax: "CMP Rs, Rd", opcode: "0100 100S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
-    ['CMPI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "CMPI IW/IL, Rd", opcode: "IW: 0000 0010 1101 0R DDDD\nIL: 0000 0010 1111 0R DDDD", hasOptionalFieldSize: true }],
-    ['CMPXY', { operands: [OperandType.Register, OperandType.Register], syntax: "CMPXY Rs, Rd", opcode: "1110 010S SSSR DDDD", requireSameRegisterPage: true }],
-    ['DEC',   { operands: [OperandType.Register], syntax: "DEC Rd", opcode: "0001 0100 001R DDDD" }],
-    ['DIVS',  { operands: [OperandType.Register, OperandType.Register], syntax: "DIVS Rs, Rd", opcode: "0101 100S SSSR DDDD", requireSameRegisterPage: true }],
-    ['DIVU',  { operands: [OperandType.Register, OperandType.Register], syntax: "DIVU Rs, Rd", opcode: "0101 101S SSSR DDDD", requireSameRegisterPage: true }],
-    ['LMO',   { operands: [OperandType.Register, OperandType.Register], syntax: "LMO Rs, Rd", opcode: "0110 101S SSSR DDDD", requireSameRegisterPage: true }],
-    ['MODS',  { operands: [OperandType.Register, OperandType.Register], syntax: "MODS Rs, Rd", opcode: "0110 110S SSSR DDDD", requireSameRegisterPage: true }],
-    ['MODU',  { operands: [OperandType.Register, OperandType.Register], syntax: "MODU Rs, Rd", opcode: "0110 111S SSSR DDDD", requireSameRegisterPage: true }],
-    ['MPYS',  { operands: [OperandType.Register, OperandType.Register], syntax: "MPYS Rs, Rd", opcode: "0101 110S SSSR DDDD", requireSameRegisterPage: true }],
-    ['MPYU',  { operands: [OperandType.Register, OperandType.Register], syntax: "MPYU Rs, Rd", opcode: "0101 111S SSSR DDDD", requireSameRegisterPage: true }],
-    ['NEG',   { operands: [OperandType.Register], syntax: "NEG Rd", opcode: "0000 0011 101R DDDD", hasOptionalFieldSize: true }],
-    ['NEGB',  { operands: [OperandType.Register], syntax: "NEGB Rd", opcode: "0000 0011 110R DDDD" }],
-    ['NOT',   { operands: [OperandType.Register], syntax: "NOT Rd", opcode: "0000 0011 111R DDDD", hasOptionalFieldSize: true }],
-    ['OR',    { operands: [OperandType.Register, OperandType.Register], syntax: "OR Rs, Rd", opcode: "0101 010S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
-    ['ORI',   { operands: [OperandType.Immediate, OperandType.Register], syntax: "ORI IL, Rd", opcode: "0000 1011 101R DDDD", hasOptionalFieldSize: true }],
-    ['SETC',  { operands: [], syntax: "SETC", opcode: "0000 1101 1110 0000" }],
-    ['SEXT',  { operands: [OperandType.Register, OperandType.Constant], syntax: "SEXT Rd, F", opcode: "0000 1101 F100 000R DDDD", minOperands: 1 }],
-    ['SUB',   { operands: [OperandType.Register, OperandType.Register], syntax: "SUB Rs, Rd", opcode: "0100 010S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
-    ['SUBB',  { operands: [OperandType.Register, OperandType.Register], syntax: "SUBB Rs, Rd", opcode: "0100 011S SSSR DDDD", requireSameRegisterPage: true }],
-    ['SUBI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "SUBI IW/IL, Rd", opcode: "IW: 0000 0011 0101 0R DDDD\nIL: 0000 0011 0111 0R DDDD", hasOptionalFieldSize: true }],
-    ['SUBK',  { operands: [OperandType.Constant, OperandType.Register], syntax: "SUBK K, Rd", opcode: "0001 01KK KKKR DDDD", hasOptionalFieldSize: true }],
-    ['SUBXY', { operands: [OperandType.Register, OperandType.Register], syntax: "SUBXY Rs, Rd", opcode: "1110 001S SSSR DDDD", requireSameRegisterPage: true }],
-    ['XOR',   { operands: [OperandType.Register, OperandType.Register], syntax: "XOR Rs, Rd", opcode: "0101 011S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
-    ['XORI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "XORI IL, Rd", opcode: "0000 1011 1101 0R DDDD", hasOptionalFieldSize: true }],
-    ['ZEXT',  { operands: [OperandType.Register, OperandType.Constant], syntax: "ZEXT Rd, F", opcode: "0000 1101 F100 001R DDDD", minOperands: 1 }],
-    ['MOVE',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MOVE src, dest", opcode: "(various)", hasOptionalFieldSize: true }],
-    ['MMFM',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MMFM Rs, [List]", opcode: "0000 1001 101R DDDD" }],
-    ['MMTM',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MMTM Rs, [List]", opcode: "0000 1001 100R DDDD" }],
-    ['MOVB',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MOVB src, dest", opcode: "(various)" }],
-    ['MOVI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "MOVI IW/IL, Rd", hasOptionalFieldSize:true, opcode: "IW: 0000 1001 110R DDDD\nIL: 0000 1001 111R DDDD" }],
-    ['MOVK',  { operands: [OperandType.Constant, OperandType.Register], syntax: "MOVK K, Rd", opcode: "0001 10KK KKKR DDDD" }],
-    ['MOVX',  { operands: [OperandType.Register, OperandType.Register], syntax: "MOVX Rs, Rd", opcode: "1110 11MS SSSR DDDD", requireSameRegisterPage: true }],
-    ['MOVY',  { operands: [OperandType.Register, OperandType.Register], syntax: "MOVY Rs, Rd", opcode: "1110 11MS SSSR DDDD", requireSameRegisterPage: true }],
-    ['CPW',    { operands: [OperandType.Register, OperandType.Register], syntax: "CPW Rs, Rd", opcode: "1110 011S SSSR DDDD", requireSameRegisterPage: true }],
-    ['CVXYL',  { operands: [OperandType.Register, OperandType.Register], syntax: "CVXYL Rs, Rd", opcode: "1110 100S SSSR DDDD", requireSameRegisterPage: true }],
-    ['DRAV',   { operands: [OperandType.Register, OperandType.Register], syntax: "DRAV Rs, Rd", opcode: "1111 011S SSSR DDDD", requireSameRegisterPage: true }],
-    ['FILL',   { operands: [OperandType.Label], syntax: "FILL L | FILL XY", opcode: "L: 0000 1111 1100 0000\nXY: 0000 1111 1110 0000" }],
-    ['LINE',   { operands: [], syntax: "LINE [0|1]", opcode: "0: 0DF1Ah\n1: 0DF9Ah" }],
-    ['PIXBLT', { operands: [OperandType.Label, OperandType.Label], syntax: "PIXBLT mode, mode", opcode: "(various)" }],
-    ['PIXT',   { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "PIXT src, dest", opcode: "(various)" }],
-    ['CALL',  { operands: [OperandType.RegisterOrLabel], syntax: "CALL Rs | CALL Label", opcode: "0000 1001 001R DDDD" }],
-    ['CALLA', { operands: [OperandType.Label], syntax: "CALLA Address", opcode: "0000 1101 0101 1111" }],
-    ['CALLR', { operands: [OperandType.Label], syntax: "CALLR Address", opcode: "0000 1101 0011 1111" }],
-    ['DINT',  { operands: [], syntax: "DINT", opcode: "0000 0011 0110 0000" }],
-    ['EINT',  { operands: [], syntax: "EINT", opcode: "0000 1101 0110 0000" }],
-    ['EMU',   { operands: [], syntax: "EMU", opcode: "0000 0001 0000 0000" }],
-    ['EXGF',  { operands: [OperandType.Register, OperandType.Constant], syntax: "EXGF Rd, F", opcode: "1101 01F1 F00R DDDD" }],
-    ['EXGPC', { operands: [OperandType.Register], syntax: "EXGPC Rd", opcode: "0000 0001 001R DDDD" }],
-    ['GETPC', { operands: [OperandType.Register], syntax: "GETPC Rd", opcode: "0000 0001 010R DDDD" }],
-    ['GETST', { operands: [OperandType.Register], syntax: "GETST Rd", opcode: "0000 0001 100R DDDD" }],
-    ['NOP',   { operands: [], syntax: "NOP", opcode: "0000 0011 0000 0000" }],
-    ['POPST', { operands: [], syntax: "POPST", opcode: "0000 0001 1100 0000" }],
-    ['PUSHST',{ operands: [], syntax: "PUSHST", opcode: "0000 0001 1110 0000" }],
-    ['PUTST', { operands: [OperandType.Register], syntax: "PUTST Rs", opcode: "0000 0001 101R DDDD" }],
-    ['RETI',  { operands: [], syntax: "RETI", opcode: "0000 1001 0100 0000" }],
-    ['RETS',  { operands: [OperandType.Constant], syntax: "RETS [N]", opcode: "0000 1001 011N NNNN", minOperands: 0 }],
-    ['REV',   { operands: [OperandType.Register], syntax: "REV Rd", opcode: "0000 0000 001R DDDD" }],
-    ['SETF',  { operands: [OperandType.Constant, OperandType.Constant, OperandType.Constant], syntax: "SETF FS, FE, F", opcode: "0000 0111 01(FS)(FE)(F)0 0000" }],
-    ['TRAP',  { operands: [OperandType.Constant], syntax: "TRAP N", opcode: "0000 1001 000N NNNN" }],
-    ['DSJ',   { operands: [OperandType.Register, OperandType.Label], syntax: "DSJ Rd, Address", opcode: "0000 1101 1000 DDDD" }],
-    ['DSJEQ', { operands: [OperandType.Register, OperandType.Label], syntax: "DSJEQ Rd, Address", opcode: "0000 1101 1010 DDDD" }],
-    ['DSJNE', { operands: [OperandType.Register, OperandType.Label], syntax: "DSJNE Rd, Address", opcode: "0000 1101 1100 DDDD" }],
-    ['DSJS',  { operands: [OperandType.Register, OperandType.Label], syntax: "DSJS Rd, Address", opcode: "0011 1Dxx xxx0 DDDD" }],
-    ['JUMP',  { operands: [OperandType.Register], syntax: "JUMP Rs", opcode: "0000 0001 011R SSSS" }],
-    ...['JRP', 'JRLS', 'JRLT', 'JRLE', 'JREQ', 'JRNE', 'JRGT', 'JRGE', 'JRHI', 'JRCC', 'JRCS', 'JRVC', 'JRVS', 'JRPL', 'JRMI', 'JRUC'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc oooooooo"}] as [string, InstructionRule]),
-    ['JR', {operands: [OperandType.Label], syntax: `JR Address`, opcode: "1100 cccc oooooooo"}],
-    ...['JAP', 'JALS', 'JALT', 'JALE', 'JAEQ', 'JANE', 'JAGT', 'JAGE', 'JAHI', 'JACC', 'JACS', 'JAVC', 'JAVS', 'JAPL', 'JAMI', 'JAUC'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc 10000000"}] as [string, InstructionRule]),
-    ['JA', {operands: [OperandType.Label], syntax: `JA Address`, opcode: "1100 cccc 10000000"}],
-    ...['RL', 'SLA', 'SLL', 'SRA', 'SRL'].map(s => [s, {operands: [OperandType.RegisterOrConstant, OperandType.Register], syntax: `${s} K/Rs, Rd`, opcode: `K: 001x xxKK KKK0 DDDD\nRs: 0110 xx0S SSSR DDDD`, hasOptionalFieldSize: true, requireSameRegisterPage: true }] as [string, InstructionRule])
+    ['ABS',   { operands: [OperandType.Register], syntax: "ABS Rd", opcode: "0000 0011 100R DDDD", description: "Store absolute value of a register." }],
+    ['ADD',   { operands: [OperandType.Register, OperandType.Register], syntax: "ADD Rs, Rd", opcode: "0100 000S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true, description: "Add source register to destination register." }],
+    ['ADDC',  { operands: [OperandType.Register, OperandType.Register], syntax: "ADDC Rs, Rd", opcode: "0100 001S SSSR DDDD", requireSameRegisterPage: true, description: "Add registers with carry." }],
+    ['ADDI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "ADDI IW/IL, Rd", opcode: "IW: 0000 1011 000R DDDD\nIL: 0000 1011 001R DDDD", hasOptionalFieldSize: true, description: "Add immediate value to register." }],
+    ['ADDK',  { operands: [OperandType.Constant, OperandType.Register], syntax: "ADDK K, Rd", opcode: "0001 00KK KKKR DDDD", hasOptionalFieldSize: true, description: "Add constant (1-32) to register." }],
+    ['ADDXY', { operands: [OperandType.Register, OperandType.Register], syntax: "ADDXY Rs, Rd", opcode: "1110 000S SSSR DDDD", requireSameRegisterPage: true, description: "Add corresponding X and Y halves of two registers." }],
+    ['AND',   { operands: [OperandType.Register, OperandType.Register], syntax: "AND Rs, Rd", opcode: "0101 000S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true, description: "Logical AND of two registers." }],
+    ['ANDI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "ANDI IL, Rd", opcode: "0000 1011 100R DDDD", hasOptionalFieldSize: true, description: "Logical AND of immediate value and register." }],
+    ['ANDN',  { operands: [OperandType.Register, OperandType.Register], syntax: "ANDN Rs, Rd", opcode: "0101 001S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true, description: "Logical AND of NOT source and destination." }],
+    ['ANDNI', { operands: [OperandType.Immediate, OperandType.Register], syntax: "ANDNI IL, Rd", opcode: "0000 1011 100R DDDD", hasOptionalFieldSize: true, description: "Logical AND of NOT immediate value and destination." }],
+    ['BTST',  { operands: [OperandType.RegisterOrConstant, OperandType.Register], syntax: "BTST K/Rs, Rd", opcode: "K: 0000 0111 01~K KKKR DDDD\nRs: 0100 101S SSSR DDDD", description: "Test a bit of a register." }],
+    ['CLR',   { operands: [OperandType.Register], syntax: "CLR Rd", opcode: "0101 0110 0R DDDD", hasOptionalFieldSize: true, description: "Clear a register to zero." }],
+    ['CLRC',  { operands: [], syntax: "CLRC", opcode: "0000 0011 0010 0000", description: "Clear the Carry (C) bit in the status register." }],
+    ['CMP',   { operands: [OperandType.Register, OperandType.Register], syntax: "CMP Rs, Rd", opcode: "0100 100S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true, description: "Compare two registers." }],
+    ['CMPI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "CMPI IW/IL, Rd", opcode: "IW: 0000 0010 1101 0R DDDD\nIL: 0000 0010 1111 0R DDDD", hasOptionalFieldSize: true, description: "Compare register with immediate value." }],
+    ['CMPXY', { operands: [OperandType.Register, OperandType.Register], syntax: "CMPXY Rs, Rd", opcode: "1110 010S SSSR DDDD", requireSameRegisterPage: true, description: "Compare X and Y halves of two registers." }],
+    ['DEC',   { operands: [OperandType.Register], syntax: "DEC Rd", opcode: "0001 0100 001R DDDD", description: "Decrement a register." }],
+    ['DIVS',  { operands: [OperandType.Register, OperandType.Register], syntax: "DIVS Rs, Rd", opcode: "0101 100S SSSR DDDD", requireSameRegisterPage: true, description: "Signed divide." }],
+    ['DIVU',  { operands: [OperandType.Register, OperandType.Register], syntax: "DIVU Rs, Rd", opcode: "0101 101S SSSR DDDD", requireSameRegisterPage: true, description: "Unsigned divide." }],
+    ['LMO',   { operands: [OperandType.Register, OperandType.Register], syntax: "LMO Rs, Rd", opcode: "0110 101S SSSR DDDD", requireSameRegisterPage: true, description: "Find leftmost one." }],
+    ['MODS',  { operands: [OperandType.Register, OperandType.Register], syntax: "MODS Rs, Rd", opcode: "0110 110S SSSR DDDD", requireSameRegisterPage: true, description: "Signed modulo." }],
+    ['MODU',  { operands: [OperandType.Register, OperandType.Register], syntax: "MODU Rs, Rd", opcode: "0110 111S SSSR DDDD", requireSameRegisterPage: true, description: "Unsigned modulo." }],
+    ['MPYS',  { operands: [OperandType.Register, OperandType.Register], syntax: "MPYS Rs, Rd", opcode: "0101 110S SSSR DDDD", requireSameRegisterPage: true, description: "Signed multiply." }],
+    ['MPYU',  { operands: [OperandType.Register, OperandType.Register], syntax: "MPYU Rs, Rd", opcode: "0101 111S SSSR DDDD", requireSameRegisterPage: true, description: "Unsigned multiply." }],
+    ['NEG',   { operands: [OperandType.Register], syntax: "NEG Rd", opcode: "0000 0011 101R DDDD", hasOptionalFieldSize: true, description: "Negate a register." }],
+    ['NEGB',  { operands: [OperandType.Register], syntax: "NEGB Rd", opcode: "0000 0011 110R DDDD", description: "Negate register with borrow." }],
+    ['NOT',   { operands: [OperandType.Register], syntax: "NOT Rd", opcode: "0000 0011 111R DDDD", hasOptionalFieldSize: true, description: "Logical NOT of a register." }],
+    ['OR',    { operands: [OperandType.Register, OperandType.Register], syntax: "OR Rs, Rd", opcode: "0101 010S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true, description: "Logical OR of two registers." }],
+    ['ORI',   { operands: [OperandType.Immediate, OperandType.Register], syntax: "ORI IL, Rd", opcode: "0000 1011 101R DDDD", hasOptionalFieldSize: true, description: "Logical OR of immediate value and register." }],
+    ['SETC',  { operands: [], syntax: "SETC", opcode: "0000 1101 1110 0000", description: "Set the Carry (C) bit in the status register." }],
+    ['SEXT',  { operands: [OperandType.Register, OperandType.Constant], syntax: "SEXT Rd, F", opcode: "0000 1101 F100 000R DDDD", minOperands: 1, description: "Sign extend a field within a register." }],
+    ['SUB',   { operands: [OperandType.Register, OperandType.Register], syntax: "SUB Rs, Rd", opcode: "0100 010S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true, description: "Subtract source register from destination." }],
+    ['SUBB',  { operands: [OperandType.Register, OperandType.Register], syntax: "SUBB Rs, Rd", opcode: "0100 011S SSSR DDDD", requireSameRegisterPage: true, description: "Subtract registers with borrow." }],
+    ['SUBI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "SUBI IW/IL, Rd", opcode: "IW: 0000 0011 0101 0R DDDD\nIL: 0000 0011 0111 0R DDDD", hasOptionalFieldSize: true, description: "Subtract immediate value from register." }],
+    ['SUBK',  { operands: [OperandType.Constant, OperandType.Register], syntax: "SUBK K, Rd", opcode: "0001 01KK KKKR DDDD", hasOptionalFieldSize: true, description: "Subtract constant (1-32) from register." }],
+    ['SUBXY', { operands: [OperandType.Register, OperandType.Register], syntax: "SUBXY Rs, Rd", opcode: "1110 001S SSSR DDDD", requireSameRegisterPage: true, description: "Subtract corresponding X and Y halves of two registers." }],
+    ['XOR',   { operands: [OperandType.Register, OperandType.Register], syntax: "XOR Rs, Rd", opcode: "0101 011S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true, description: "Logical XOR of two registers." }],
+    ['XORI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "XORI IL, Rd", opcode: "0000 1011 1101 0R DDDD", hasOptionalFieldSize: true, description: "Logical XOR of immediate value and register." }],
+    ['ZEXT',  { operands: [OperandType.Register, OperandType.Constant], syntax: "ZEXT Rd, F", opcode: "0000 1101 F100 001R DDDD", minOperands: 1, description: "Zero extend a field within a register." }],
+    ['MOVE',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MOVE src, dest", opcode: "(various)", hasOptionalFieldSize: true, description: "Move data between registers and/or memory." }],
+    ['MMFM',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MMFM Rs, [List]", opcode: "0000 1001 101R DDDD", description: "Move multiple registers from memory." }],
+    ['MMTM',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MMTM Rs, [List]", opcode: "0000 1001 100R DDDD", description: "Move multiple registers to memory." }],
+    ['MOVB',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MOVB src, dest", opcode: "(various)", description: "Move a byte between registers and/or memory." }],
+    ['MOVI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "MOVI IW/IL, Rd", hasOptionalFieldSize:true, opcode: "IW: 0000 1001 110R DDDD\nIL: 0000 1001 111R DDDD", description: "Move an immediate value into a register." }],
+    ['MOVK',  { operands: [OperandType.Constant, OperandType.Register], syntax: "MOVK K, Rd", opcode: "0001 10KK KKKR DDDD", description: "Move a constant (1-32) into a register." }],
+    ['MOVX',  { operands: [OperandType.Register, OperandType.Register], syntax: "MOVX Rs, Rd", opcode: "1110 11MS SSSR DDDD", requireSameRegisterPage: true, description: "Move the X-half of a register." }],
+    ['MOVY',  { operands: [OperandType.Register, OperandType.Register], syntax: "MOVY Rs, Rd", opcode: "1110 11MS SSSR DDDD", requireSameRegisterPage: true, description: "Move the Y-half of a register." }],
+    ['CPW',    { operands: [OperandType.Register, OperandType.Register], syntax: "CPW Rs, Rd", opcode: "1110 011S SSSR DDDD", requireSameRegisterPage: true, description: "Compare point to window." }],
+    ['CVXYL',  { operands: [OperandType.Register, OperandType.Register], syntax: "CVXYL Rs, Rd", opcode: "1110 100S SSSR DDDD", requireSameRegisterPage: true, description: "Convert XY address to linear address." }],
+    ['DRAV',   { operands: [OperandType.Register, OperandType.Register], syntax: "DRAV Rs, Rd", opcode: "1111 011S SSSR DDDD", requireSameRegisterPage: true, description: "Draw and advance." }],
+    ['FILL',   { operands: [OperandType.Label], syntax: "FILL L | FILL XY", opcode: "L: 0000 1111 1100 0000\nXY: 0000 1111 1110 0000", description: "Fill a pixel array." }],
+    ['LINE',   { operands: [], syntax: "LINE [0|1]", opcode: "0: 0DF1Ah\n1: 0DF9Ah", description: "Initiate a line draw operation." }],
+    ['PIXBLT', { operands: [OperandType.Label, OperandType.Label], syntax: "PIXBLT mode, mode", opcode: "(various)", description: "Pixel Block Transfer." }],
+    ['PIXT',   { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "PIXT src, dest", opcode: "(various)", description: "Pixel Transfer." }],
+    ['CALL',  { operands: [OperandType.RegisterOrLabel], syntax: "CALL Rs | CALL Label", opcode: "0000 1001 001R DDDD", description: "Call a subroutine." }],
+    ['CALLA', { operands: [OperandType.Label], syntax: "CALLA Address", opcode: "0000 1101 0101 1111", description: "Call subroutine at an absolute address." }],
+    ['CALLR', { operands: [OperandType.Label], syntax: "CALLR Address", opcode: "0000 1101 0011 1111", description: "Call subroutine at a relative address." }],
+    ['DINT',  { operands: [], syntax: "DINT", opcode: "0000 0011 0110 0000", description: "Disable interrupts." }],
+    ['EINT',  { operands: [], syntax: "EINT", opcode: "0000 1101 0110 0000", description: "Enable interrupts." }],
+    ['EMU',   { operands: [], syntax: "EMU", opcode: "0000 0001 0000 0000", description: "Initiate emulation." }],
+    ['EXGF',  { operands: [OperandType.Register, OperandType.Constant], syntax: "EXGF Rd, F", opcode: "1101 01F1 F00R DDDD", description: "Exchange field size." }],
+    ['EXGPC', { operands: [OperandType.Register], syntax: "EXGPC Rd", opcode: "0000 0001 001R DDDD", description: "Exchange Program Counter with a register." }],
+    ['GETPC', { operands: [OperandType.Register], syntax: "GETPC Rd", opcode: "0000 0001 010R DDDD", description: "Get the value of the Program Counter." }],
+    ['GETST', { operands: [OperandType.Register], syntax: "GETST Rd", opcode: "0000 0001 100R DDDD", description: "Get the value of the Status Register." }],
+    ['NOP',   { operands: [], syntax: "NOP", opcode: "0000 0011 0000 0000", description: "No operation." }],
+    ['POPST', { operands: [], syntax: "POPST", opcode: "0000 0001 1100 0000", description: "Pop the Status Register from the stack." }],
+    ['PUSHST',{ operands: [], syntax: "PUSHST", opcode: "0000 0001 1110 0000", description: "Push the Status Register onto the stack." }],
+    ['PUTST', { operands: [OperandType.Register], syntax: "PUTST Rs", opcode: "0000 0001 101R DDDD", description: "Copy a register's value to the Status Register." }],
+    ['RETI',  { operands: [], syntax: "RETI", opcode: "0000 1001 0100 0000", description: "Return from interrupt." }],
+    ['RETS',  { operands: [OperandType.Constant], syntax: "RETS [N]", opcode: "0000 1001 011N NNNN", minOperands: 0, description: "Return from subroutine." }],
+    ['REV',   { operands: [OperandType.Register], syntax: "REV Rd", opcode: "0000 0000 001R DDDD", description: "Get the TMS34010 revision level." }],
+    ['SETF',  { operands: [OperandType.Constant, OperandType.Constant, OperandType.Constant], syntax: "SETF FS, FE, F", opcode: "0000 0111 01(FS)(FE)(F)0 0000", description: "Set the field parameters." }],
+    ['TRAP',  { operands: [OperandType.Constant], syntax: "TRAP N", opcode: "0000 1001 000N NNNN", description: "Software interrupt." }],
+    ['DSJ',   { operands: [OperandType.Register, OperandType.Label], syntax: "DSJ Rd, Address", opcode: "0000 1101 1000 DDDD", description: "Decrement and skip if not zero." }],
+    ['DSJEQ', { operands: [OperandType.Register, OperandType.Label], syntax: "DSJEQ Rd, Address", opcode: "0000 1101 1010 DDDD", description: "Decrement and skip if equal." }],
+    ['DSJNE', { operands: [OperandType.Register, OperandType.Label], syntax: "DSJNE Rd, Address", opcode: "0000 1101 1100 DDDD", description: "Decrement and skip if not equal." }],
+    ['DSJS',  { operands: [OperandType.Register, OperandType.Label], syntax: "DSJS Rd, Address", opcode: "0011 1Dxx xxx0 DDDD", description: "Decrement and skip short." }],
+    ['JUMP',  { operands: [OperandType.Register], syntax: "JUMP Rs", opcode: "0000 0001 011R SSSS", description: "Jump to the address in a register." }],
+    ...['JRP', 'JRLS', 'JRLT', 'JRLE', 'JREQ', 'JRNE', 'JRGT', 'JRGE', 'JRHI', 'JRCC', 'JRCS', 'JRVC', 'JRVS', 'JRPL', 'JRMI', 'JRUC'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc oooooooo", description: `Jump relative if condition '${j.substring(2)}' is met.`}] as [string, InstructionRule]),
+    ['JR', {operands: [OperandType.Label], syntax: `JR Address`, opcode: "1100 cccc oooooooo", description: "Jump relative unconditionally."}],
+    ...['JAP', 'JALS', 'JALT', 'JALE', 'JAEQ', 'JANE', 'JAGT', 'JAGE', 'JAHI', 'JACC', 'JACS', 'JAVC', 'JAVS', 'JAPL', 'JAMI', 'JAUC'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc 10000000", description: `Jump absolute if condition '${j.substring(2)}' is met.`}] as [string, InstructionRule]),
+    ['JA', {operands: [OperandType.Label], syntax: `JA Address`, opcode: "1100 cccc 10000000", description: "Jump absolute unconditionally."}],
+    ...['RL', 'SLA', 'SLL', 'SRA', 'SRL'].map(s => [s, {operands: [OperandType.RegisterOrConstant, OperandType.Register], syntax: `${s} K/Rs, Rd`, opcode: `K: 001x xxKK KKK0 DDDD\nRs: 0110 xx0S SSSR DDDD`, hasOptionalFieldSize: true, requireSameRegisterPage: true, description: `Shift or rotate a register.` }] as [string, InstructionRule])
 ]);
 
 const KNOWN_INSTRUCTIONS = new Set(INSTRUCTION_RULES.keys());
@@ -173,6 +198,9 @@ const KNOWN_DIRECTIVES = new Set([
 ]);
 
 const DIAGNOSTIC_COLLECTION = vscode.languages.createDiagnosticCollection('tms34010');
+
+// A cache to store symbols for each document, used by DefinitionProvider
+const documentSymbolsCache = new Map<string, Map<string, vscode.Range>>();
 
 export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
@@ -262,7 +290,7 @@ export function activate(context: vscode.ExtensionContext) {
                 
                 if (INSTRUCTION_RULES.has(word)) {
                     const rule = INSTRUCTION_RULES.get(word)!;
-                    const content = new vscode.MarkdownString(`**${word}**\n\n*${rule.syntax}*`);
+                    const content = new vscode.MarkdownString(`**${word}**\n\n*${rule.syntax}*\n\n${rule.description}`);
                     content.appendCodeblock(rule.opcode, 'plaintext');
                     return new vscode.Hover(content, range);
                 }
@@ -273,6 +301,25 @@ export function activate(context: vscode.ExtensionContext) {
                 }
 
                 return null;
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.languages.registerDefinitionProvider('tms-assembly', {
+            provideDefinition(document, position, token) {
+                const wordRange = document.getWordRangeAtPosition(position);
+                if (!wordRange) {
+                    return undefined;
+                }
+                const word = document.getText(wordRange).toUpperCase();
+                const symbols = documentSymbolsCache.get(document.uri.toString());
+
+                if (symbols && symbols.has(word)) {
+                    return new vscode.Location(document.uri, symbols.get(word)!);
+                }
+
+                return undefined;
             }
         })
     );
@@ -335,6 +382,8 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
             }
         }
     }
+
+    documentSymbolsCache.set(doc.uri.toString(), definedSymbols);
 
     // Second pass: validate instructions
     for (let lineIndex = 0; lineIndex < doc.lineCount; lineIndex++) {
