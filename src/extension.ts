@@ -7,8 +7,9 @@ enum OperandType {
     Constant,
     Address,
     Label,
-    RegisterOrConstant, // For instructions like BTST
-    RegisterOrLabel,    // For jump/call targets
+    RegisterOrConstant,
+    RegisterOrLabel,
+    Addressable, // Represents a register or a memory address
     None
 }
 
@@ -18,8 +19,41 @@ interface InstructionRule {
     syntax: string;
     opcode: string;
     hasOptionalFieldSize?: boolean;
-    requireSameRegisterPage?: boolean; // New flag for same-page register validation
+    requireSameRegisterPage?: boolean;
 }
+
+// --- Validation Helper Functions ---
+
+const A_REGISTERS = new Set(['A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10', 'A11', 'A12', 'A13', 'A14', 'SP']);
+const B_REGISTERS = new Set(['B0', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B14', 'FP']);
+const OTHER_REGISTERS = new Set(['ST', 'PC', 'IOSTAT', 'CTRL1', 'CTRL2', 'HSTADR', 'HSTDATA', 'HSTCTL', 'INTPEND', 'INTENB', 'DPYCTL', 'DPYSTRT', 'DPYADR', 'VCOUNT', 'HCOUNT', 'PFILL', 'PLINE', 'CONVSP', 'CONVDP', 'PSIZE', 'PMOVE', 'SADDR', 'SCOUNT', 'DADDR', 'DCOUNT', 'OFFSET', 'WINDOW', 'WSTART', 'WEND', 'DYDX', 'COLOR0', 'COLOR1']);
+const TMS34010_REGISTERS = new Set([...A_REGISTERS, ...B_REGISTERS, ...OTHER_REGISTERS]);
+
+const isRegister = (op: string): boolean => TMS34010_REGISTERS.has(op.toUpperCase());
+
+const isConstant = (op: string): boolean => {
+    // Handles various number formats: 5, 5h, >5, b101, etc.
+    // Also handles optional immediate specifier #
+    const value = op.startsWith('#') ? op.substring(1) : op;
+    return /^(>[0-9A-F]+|[0-9A-F]+H|B[01]+|[0-9]+)$/i.test(value);
+};
+
+// Checks if a string has the format of a label (doesn't check if defined)
+const isLabelFormat = (op: string): boolean => {
+    return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(op) && !isRegister(op);
+};
+
+const isAddress = (op: string): boolean => {
+    // Absolute address: @>FFFF, @label
+    if (op.startsWith('@')) {
+        const subOperand = op.substring(1);
+        return isLabelFormat(subOperand) || isConstant(subOperand);
+    }
+    // Indirect address: *A0, -*A0, *A0+, *A0(10), *A0(LABEL)
+    const indirectMatch = op.match(/^(\*|-)?(A[0-9]{1,2}|B[0-9]{1,2}|SP|FP)(\(.+\))?(\+)?$/i);
+    return !!indirectMatch;
+};
+
 
 // A structured map of instructions and their validation rules
 const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
@@ -62,10 +96,10 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['XOR',   { operands: [OperandType.Register, OperandType.Register], syntax: "XOR Rs, Rd", opcode: "0101 011S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
     ['XORI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "XORI IL, Rd", opcode: "0000 1011 1101 0R DDDD", hasOptionalFieldSize: true }],
     ['ZEXT',  { operands: [OperandType.Register], syntax: "ZEXT Rd, F", opcode: "0000 1101 F100 001R DDDD", hasOptionalFieldSize: true }],
-    ['MOVE',  { operands: [OperandType.Address, OperandType.Address], syntax: "MOVE src, dest", opcode: "(various)", hasOptionalFieldSize: true }],
-    ['MMFM',  { operands: [OperandType.Register, OperandType.Address], syntax: "MMFM Rs, [List]", opcode: "0000 1001 101R DDDD" }],
-    ['MMTM',  { operands: [OperandType.Register, OperandType.Address], syntax: "MMTM Rs, [List]", opcode: "0000 1001 100R DDDD" }],
-    ['MOVB',  { operands: [OperandType.Address, OperandType.Address], syntax: "MOVB src, dest", opcode: "(various)" }],
+    ['MOVE',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MOVE src, dest", opcode: "(various)", hasOptionalFieldSize: true }],
+    ['MMFM',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MMFM Rs, [List]", opcode: "0000 1001 101R DDDD" }],
+    ['MMTM',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MMTM Rs, [List]", opcode: "0000 1001 100R DDDD" }],
+    ['MOVB',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MOVB src, dest", opcode: "(various)" }],
     ['MOVI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "MOVI IW/IL, Rd", opcode: "IW: 0000 1001 110R DDDD\nIL: 0000 1001 111R DDDD" }],
     ['MOVK',  { operands: [OperandType.Constant, OperandType.Register], syntax: "MOVK K, Rd", opcode: "0001 10KK KKKR DDDD" }],
     ['MOVX',  { operands: [OperandType.Register, OperandType.Register], syntax: "MOVX Rs, Rd", opcode: "1110 11MS SSSR DDDD", requireSameRegisterPage: true }],
@@ -76,7 +110,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['FILL',   { operands: [OperandType.Label], syntax: "FILL L | FILL XY", opcode: "L: 0000 1111 1100 0000\nXY: 0000 1111 1110 0000" }],
     ['LINE',   { operands: [], syntax: "LINE [0|1]", opcode: "0: 0DF1Ah\n1: 0DF9Ah" }],
     ['PIXBLT', { operands: [OperandType.Label, OperandType.Label], syntax: "PIXBLT mode, mode", opcode: "(various)" }],
-    ['PIXT',   { operands: [OperandType.Address, OperandType.Address], syntax: "PIXT src, dest", opcode: "(various)" }],
+    ['PIXT',   { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "PIXT src, dest", opcode: "(various)" }],
     ['CALL',  { operands: [OperandType.RegisterOrLabel], syntax: "CALL Rs | CALL Label", opcode: "0000 1001 001R DDDD" }],
     ['CALLA', { operands: [OperandType.Label], syntax: "CALLA Address", opcode: "0000 1101 0101 1111" }],
     ['CALLR', { operands: [OperandType.Label], syntax: "CALLR Address", opcode: "0000 1101 0011 1111" }],
@@ -100,17 +134,13 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['DSJEQ', { operands: [OperandType.Register, OperandType.Label], syntax: "DSJEQ Rd, Address", opcode: "0000 1101 1010 DDDD" }],
     ['DSJNE', { operands: [OperandType.Register, OperandType.Label], syntax: "DSJNE Rd, Address", opcode: "0000 1101 1100 DDDD" }],
     ['DSJS',  { operands: [OperandType.Register, OperandType.Label], syntax: "DSJS Rd, Address", opcode: "0011 1Dxx xxx0 DDDD" }],
-    ['JUMP',  { operands: [OperandType.RegisterOrLabel], syntax: "JUMP Rs/Label", opcode: "0000 0001 0110 DDDD" }],
-    ...['JRP', 'JRLS', 'JRLT', 'JRLE', 'JREQ', 'JRNE', 'JRGT', 'JRGE', 'JRHI', 'JRCC', 'JRCS', 'JRVC', 'JRVS', 'JRPL', 'JRMI', 'JRUC', 'JR', 'JRN', 'JRNN', 'JRC', 'JRNC', 'JRZ', 'JRNZ', 'JAP', 'JALS', 'JALT', 'JALE', 'JAEQ', 'JANE', 'JAGT', 'JAGE', 'JAHI', 'JACC', 'JACS', 'JAVC', 'JAVS', 'JAPL', 'JAMI', 'JAUC'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc oooooooo"}] as [string, InstructionRule]),
+    ['JUMP',  { operands: [OperandType.Register], syntax: "JUMP Rs", opcode: "0000 0001 011R SSSS" }],
+    ...['JRP', 'JRLS', 'JRLT', 'JRLE', 'JREQ', 'JRNE', 'JRGT', 'JRGE', 'JRHI', 'JRCC', 'JRCS', 'JRVC', 'JRVS', 'JRPL', 'JRMI', 'JRUC', 'JR', 'JRN', 'JRNN', 'JRC', 'JRNC', 'JRZ', 'JRNZ'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc oooooooo"}] as [string, InstructionRule]),
+    ...['JAP', 'JALS', 'JALT', 'JALE', 'JAEQ', 'JANE', 'JAGT', 'JAGE', 'JAHI', 'JACC', 'JACS', 'JAVC', 'JAVS', 'JAPL', 'JAMI', 'JAUC'].map(j => [j, {operands: [OperandType.Address], syntax: `${j} @Address`, opcode: "1100 cccc 10000000"}] as [string, InstructionRule]),
     ...['RL', 'SLA', 'SLL', 'SRA', 'SRL'].map(s => [s, {operands: [OperandType.RegisterOrConstant, OperandType.Register], syntax: `${s} K/Rs, Rd`, opcode: `K: 001x xxKK KKK0 DDDD\nRs: 0110 xx0S SSSR DDDD`, hasOptionalFieldSize: true, requireSameRegisterPage: true }] as [string, InstructionRule])
 ]);
 
 const KNOWN_INSTRUCTIONS = new Set(INSTRUCTION_RULES.keys());
-
-// Define register files for validation
-const A_REGISTERS = new Set(['A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10', 'A11', 'A12', 'A13', 'A14', 'SP']);
-const B_REGISTERS = new Set(['B0', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B14', 'FP']);
-const TMS34010_REGISTERS = new Set([...A_REGISTERS, ...B_REGISTERS, 'ST', 'PC', 'IOSTAT', 'CTRL1', 'CTRL2', 'HSTADR', 'HSTDATA', 'HSTCTL', 'INTPEND', 'INTENB', 'DPYCTL', 'DPYSTRT', 'DPYADR', 'VCOUNT', 'HCOUNT', 'PFILL', 'PLINE', 'CONVSP', 'CONVDP', 'PSIZE', 'PMOVE', 'SADDR', 'SCOUNT', 'DADDR', 'DCOUNT', 'OFFSET', 'WINDOW', 'WSTART', 'WEND', 'DYDX', 'COLOR0', 'COLOR1']);
 
 const KNOWN_DIRECTIVES = new Set([
     '.set', '.equ', '.word', '.long', '.string', '.asciiz', '.byte', '.field', '.sint', '.float',
@@ -265,12 +295,7 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                 const reg1 = operands[0].toUpperCase();
                 const reg2 = operands[1].toUpperCase();
 
-                const reg1IsA = A_REGISTERS.has(reg1);
-                const reg1IsB = B_REGISTERS.has(reg1);
-                const reg2IsA = A_REGISTERS.has(reg2);
-                const reg2IsB = B_REGISTERS.has(reg2);
-
-                if ((reg1IsA && reg2IsB) || (reg1IsB && reg2IsA)) {
+                if ((A_REGISTERS.has(reg1) && B_REGISTERS.has(reg2)) || (B_REGISTERS.has(reg1) && A_REGISTERS.has(reg2))) {
                     const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, lineWithoutComment.trimRight().length);
                     diagnostics.push(new vscode.Diagnostic(range, `${mnemonic} requires both registers to be in the same file (A or B).`, vscode.DiagnosticSeverity.Error));
                 }
@@ -281,19 +306,36 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                 const expectedType = rule.operands[i];
                 let isValid = false;
 
-                const isRegister = () => TMS34010_REGISTERS.has(operandValue.toUpperCase());
-                const isConstant = () => /^(>[0-9A-F]+|[0-9A-F]+H|B[01]+|[0-9]+)$/i.test(operandValue);
-                const isLabel = () => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(operandValue) || definedSymbols.has(operandValue.toUpperCase());
-                const isAddress = () => /^\*?([a-zA-Z0-9_]+)(\(.*\))?(\+)?$/.test(operandValue);
-
                 switch (expectedType) {
-                    case OperandType.Register: isValid = isRegister(); break;
-                    case OperandType.Immediate: isValid = isConstant() || isLabel(); break;
-                    case OperandType.Constant: isValid = isConstant(); break;
-                    case OperandType.Label: isValid = isLabel(); break;
-                    case OperandType.Address: isValid = isAddress(); break;
-                    case OperandType.RegisterOrConstant: isValid = isRegister() || isConstant(); break;
-                    case OperandType.RegisterOrLabel: isValid = isRegister() || isLabel(); break;
+                    case OperandType.Register:
+                        isValid = isRegister(operandValue);
+                        break;
+                    case OperandType.Immediate:
+                        isValid = isConstant(operandValue) || isLabelFormat(operandValue);
+                        break;
+                    case OperandType.Constant:
+                        isValid = isConstant(operandValue);
+                        break;
+                    case OperandType.Label:
+                        isValid = isLabelFormat(operandValue) && definedSymbols.has(operandValue.toUpperCase());
+                        if (isLabelFormat(operandValue) && !isValid) {
+                            const range = new vscode.Range(lineIndex, lineWithoutComment.indexOf(operandValue), lineIndex, lineWithoutComment.indexOf(operandValue) + operandValue.length);
+                            diagnostics.push(new vscode.Diagnostic(range, `Undefined label: '${operandValue}'`, vscode.DiagnosticSeverity.Error));
+                            continue; // Skip generic error
+                        }
+                        break;
+                    case OperandType.Address:
+                        isValid = isAddress(operandValue);
+                        break;
+                    case OperandType.Addressable:
+                        isValid = isRegister(operandValue) || isAddress(operandValue);
+                        break;
+                    case OperandType.RegisterOrConstant:
+                        isValid = isRegister(operandValue) || isConstant(operandValue);
+                        break;
+                    case OperandType.RegisterOrLabel:
+                        isValid = isRegister(operandValue) || isLabelFormat(operandValue);
+                        break;
                 }
                 
                 if (!isValid) {
@@ -301,6 +343,22 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                     if (operandStartIndex === -1) { operandStartIndex = line.firstNonWhitespaceCharacterIndex; }
                     const range = new vscode.Range(lineIndex, operandStartIndex, lineIndex, operandStartIndex + operandValue.length);
                     diagnostics.push(new vscode.Diagnostic(range, `Invalid type for operand ${i + 1} of ${mnemonic}.`, vscode.DiagnosticSeverity.Error));
+                } else if (isAddress(operandValue)) {
+                    const offsetMatch = operandValue.match(/\((.+)\)/);
+                    if (offsetMatch) {
+                        const offsetValue = offsetMatch[1];
+                        if (!isConstant(offsetValue) && !definedSymbols.has(offsetValue.toUpperCase())) {
+                            const offsetStartIndex = lineWithoutComment.indexOf(offsetValue);
+                            const range = new vscode.Range(lineIndex, offsetStartIndex, lineIndex, offsetStartIndex + offsetValue.length);
+                            diagnostics.push(new vscode.Diagnostic(range, `Undefined symbol used in offset: '${offsetValue}'`, vscode.DiagnosticSeverity.Error));
+                        }
+                    }
+                    const atMatch = operandValue.match(/@([a-zA-Z_][a-zA-Z0-9_]*)/);
+                    if(atMatch && !isConstant(atMatch[1]) && !definedSymbols.has(atMatch[1].toUpperCase())) {
+                        const atStartIndex = lineWithoutComment.indexOf(atMatch[1]);
+                        const range = new vscode.Range(lineIndex, atStartIndex, lineIndex, atStartIndex + atMatch[1].length);
+                        diagnostics.push(new vscode.Diagnostic(range, `Undefined symbol in address: '${atMatch[1]}'`, vscode.DiagnosticSeverity.Error));
+                    }
                 }
             }
         } else if (!KNOWN_DIRECTIVES.has(mnemonic.toLowerCase())) {
