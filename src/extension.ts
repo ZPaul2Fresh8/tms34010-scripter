@@ -11,6 +11,7 @@ enum OperandType {
     RegisterOrLabel,
     Addressable, // Represents a register or a memory address
     Flag,        // Represents a 0 or 1 flag
+    FillMode,    // For FILL L or FILL XY
     None
 }
 
@@ -56,6 +57,11 @@ const isConstant = (op: string): boolean => {
 };
 
 const isFlag = (op: string): boolean => op === '0' || op === '1';
+
+const isFillMode = (op: string): boolean => {
+    const upperOp = op.toUpperCase();
+    return upperOp === 'L' || upperOp === 'XY';
+};
 
 // Checks if a string has the format of a label (doesn't check if defined)
 const isLabelFormat = (op: string): boolean => {
@@ -151,7 +157,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['CPW',    { operands: [OperandType.Register, OperandType.Register], syntax: "CPW Rs, Rd", opcode: "1110 011S SSSR DDDD", requireSameRegisterPage: true, description: "Compare point to window." }],
     ['CVXYL',  { operands: [OperandType.Register, OperandType.Register], syntax: "CVXYL Rs, Rd", opcode: "1110 100S SSSR DDDD", requireSameRegisterPage: true, description: "Convert XY address to linear address." }],
     ['DRAV',   { operands: [OperandType.Register, OperandType.Register], syntax: "DRAV Rs, Rd", opcode: "1111 011S SSSR DDDD", requireSameRegisterPage: true, description: "Draw and advance." }],
-    ['FILL',   { operands: [OperandType.Label], syntax: "FILL L | FILL XY", opcode: "L: 0000 1111 1100 0000\nXY: 0000 1111 1110 0000", description: "Fill a pixel array." }],
+    ['FILL',   { operands: [OperandType.FillMode], syntax: "FILL L | FILL XY", opcode: "L: 0000 1111 1100 0000\nXY: 0000 1111 1110 0000", description: "Fill a pixel array." }],
     ['LINE',   { operands: [OperandType.Flag], syntax: "LINE [0|1]", opcode: "0: 0DF1Ah\n1: 0DF9Ah", minOperands: 0, description: "Initiate a line draw operation." }],
     ['PIXBLT', { operands: [OperandType.Label, OperandType.Label], syntax: "PIXBLT mode, mode", opcode: "(various)", description: "Pixel Block Transfer." }],
     ['PIXT',   { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "PIXT src, dest", opcode: "(various)", description: "Pixel Transfer." }],
@@ -274,6 +280,8 @@ export function activate(context: vscode.ExtensionContext) {
                             case OperandType.Label:
                             case OperandType.Immediate:
                                 return createLabelSuggestions();
+                            case OperandType.Flag:
+                                return [new vscode.CompletionItem('0'), new vscode.CompletionItem('1')];
                         }
                     }
                 }
@@ -480,6 +488,7 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                     case OperandType.Addressable: isValid = isRegister(operandValue) || isAddress(operandValue); break;
                     case OperandType.RegisterOrConstant: isValid = isRegister(operandValue) || isConstant(operandValue); break;
                     case OperandType.RegisterOrLabel: isValid = isRegister(operandValue) || checkLabel(operandValue); break;
+                    case OperandType.FillMode: isValid = isFillMode(operandValue); break;
                 }
                 
                 if (!isValid) {
