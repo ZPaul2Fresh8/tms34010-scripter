@@ -8,7 +8,8 @@
         { "include": "#directives" },
         { "include": "#registers" },
         { "include": "#strings" },
-        { "include": "#labels" }
+        { "include": "#labels" },
+        { "include": "#equates" }
     ],
     "repository": {
         "comments": {
@@ -26,7 +27,7 @@
         "directives": {
             "patterns": [{
                 "name": "keyword.directive.asm",
-                "match": "(?i)\\.(include|set|equ|word|long|string|asciiz|byte|field|sint|float|sect|bss|text|data|align|space|global|globl|end|org|def|ref|newblock|cdef|endcdef|clink|cstruct|endstruct|struct|union|tag|eval|emsg|wmsg|fclist|fcnolist|drlist|drnolist|mlist|mnolist|sslist|ssnolist|var|label|version|length|width|option|if|else|endif)\\b"
+                "match": "(?i)\\.(set|equ|word|long|string|asciiz|byte|field|sint|float|sect|bss|text|data|align|space|global|globl|end|org|def|ref|newblock|cdef|endcdef|clink|cstruct|endstruct|struct|union|tag|eval|emsg|wmsg|fclist|fcnolist|drlist|drnolist|mlist|mnolist|sslist|ssnolist|var|label|version|length|width|option|if|else|endif|include)\\b"
             }]
         },
         "registers": {
@@ -50,6 +51,12 @@
             "patterns": [{
                 "name": "entity.name.function.label.asm",
                 "match": "^[a-zA-Z_][a-zA-Z0-9_]*:"
+            }]
+        },
+        "equates": {
+             "patterns": [{
+                "name": "variable.other.constant.asm",
+                "match": "^([a-zA-Z_][a-zA-Z0-9_]+)(?=\\s+\\.(equ|set))"
             }]
         }
     }
