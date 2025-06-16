@@ -32,10 +32,24 @@ const TMS34010_REGISTERS = new Set([...A_REGISTERS, ...B_REGISTERS, ...OTHER_REG
 const isRegister = (op: string): boolean => TMS34010_REGISTERS.has(op.toUpperCase());
 
 const isConstant = (op: string): boolean => {
-    // Handles various number formats: 5, 5h, >5, b101, etc.
-    // Also handles optional immediate specifier #
-    const value = op.startsWith('#') ? op.substring(1) : op;
-    return /^(>[0-9A-F]+|[0-9A-F]+H|B[01]+|[0-9]+)$/i.test(value);
+    let value = op.toUpperCase();
+    if (value.startsWith('#')) {
+        value = value.substring(1);
+    }
+    
+    // Hex with 'h' suffix (can be negative)
+    if (/^-?[0-9A-F]+H$/.test(value)) return true;
+    
+    // Hex with '>' prefix (cannot be negative)
+    if (/^>[0-9A-F]+$/.test(value)) return true;
+    
+    // Binary with 'b' prefix (cannot be negative)
+    if (/^B[01]+$/.test(value)) return true;
+    
+    // Decimal (can be negative)
+    if (/^-?[0-9]+$/.test(value)) return true;
+    
+    return false;
 };
 
 // Checks if a string has the format of a label (doesn't check if defined)
@@ -67,6 +81,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['AND',   { operands: [OperandType.Register, OperandType.Register], syntax: "AND Rs, Rd", opcode: "0101 000S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
     ['ANDI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "ANDI IL, Rd", opcode: "0000 1011 100R DDDD", hasOptionalFieldSize: true }],
     ['ANDN',  { operands: [OperandType.Register, OperandType.Register], syntax: "ANDN Rs, Rd", opcode: "0101 001S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true }],
+    ['ANDNI', { operands: [OperandType.Immediate, OperandType.Register], syntax: "ANDNI IL, Rd", opcode: "0000 1011 100R DDDD", hasOptionalFieldSize: true }],
     ['BTST',  { operands: [OperandType.RegisterOrConstant, OperandType.Register], syntax: "BTST K/Rs, Rd", opcode: "K: 0000 0111 01~K KKKR DDDD\nRs: 0100 101S SSSR DDDD" }],
     ['CLR',   { operands: [OperandType.Register], syntax: "CLR Rd", opcode: "0101 0110 0R DDDD", hasOptionalFieldSize: true }],
     ['CLRC',  { operands: [], syntax: "CLRC", opcode: "0000 0011 0010 0000" }],
@@ -135,8 +150,10 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['DSJNE', { operands: [OperandType.Register, OperandType.Label], syntax: "DSJNE Rd, Address", opcode: "0000 1101 1100 DDDD" }],
     ['DSJS',  { operands: [OperandType.Register, OperandType.Label], syntax: "DSJS Rd, Address", opcode: "0011 1Dxx xxx0 DDDD" }],
     ['JUMP',  { operands: [OperandType.Register], syntax: "JUMP Rs", opcode: "0000 0001 011R SSSS" }],
-    ...['JRP', 'JRLS', 'JRLT', 'JRLE', 'JREQ', 'JRNE', 'JRGT', 'JRGE', 'JRHI', 'JRCC', 'JRCS', 'JRVC', 'JRVS', 'JRPL', 'JRMI', 'JRUC', 'JR', 'JRN', 'JRNN', 'JRC', 'JRNC', 'JRZ', 'JRNZ'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc oooooooo"}] as [string, InstructionRule]),
-    ...['JAP', 'JALS', 'JALT', 'JALE', 'JAEQ', 'JANE', 'JAGT', 'JAGE', 'JAHI', 'JACC', 'JACS', 'JAVC', 'JAVS', 'JAPL', 'JAMI', 'JAUC', 'JA'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc 10000000"}] as [string, InstructionRule]),
+    ...['JRP', 'JRLS', 'JRLT', 'JRLE', 'JREQ', 'JRNE', 'JRGT', 'JRGE', 'JRHI', 'JRCC', 'JRCS', 'JRVC', 'JRVS', 'JRPL', 'JRMI', 'JRUC', 'JRN', 'JRNN', 'JRC', 'JRNC', 'JRZ', 'JRNZ'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc oooooooo"}] as [string, InstructionRule]),
+    ['JR', {operands: [OperandType.Label], syntax: `JR Address`, opcode: "1100 cccc oooooooo"}],
+    ...['JAP', 'JALS', 'JALT', 'JALE', 'JAEQ', 'JANE', 'JAGT', 'JAGE', 'JAHI', 'JACC', 'JACS', 'JAVC', 'JAVS', 'JAPL', 'JAMI', 'JAUC'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc 10000000"}] as [string, InstructionRule]),
+    ['JA', {operands: [OperandType.Label], syntax: `JA Address`, opcode: "1100 cccc 10000000"}],
     ...['RL', 'SLA', 'SLL', 'SRA', 'SRL'].map(s => [s, {operands: [OperandType.RegisterOrConstant, OperandType.Register], syntax: `${s} K/Rs, Rd`, opcode: `K: 001x xxKK KKK0 DDDD\nRs: 0110 xx0S SSSR DDDD`, hasOptionalFieldSize: true, requireSameRegisterPage: true }] as [string, InstructionRule])
 ]);
 
@@ -236,15 +253,6 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                 } else {
                     definedSymbols.set(equateName, currentRange);
                 }
-            }
-        }
-        
-        const globalMatch = text.trim().match(/^\.(global|globl)\s+([a-zA-Z_][a-zA-Z0-9_]+)/i);
-        if (globalMatch) {
-            const symbolName = globalMatch[2].toUpperCase();
-            const currentRange = symbolRange(globalMatch[2]);
-            if (currentRange && !definedSymbols.has(symbolName)) {
-                definedSymbols.set(symbolName, currentRange);
             }
         }
     }
