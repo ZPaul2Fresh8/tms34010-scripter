@@ -12,6 +12,7 @@ enum OperandType {
     Addressable, // Represents a register or a memory address
     Flag,        // Represents a 0 or 1 flag
     FillMode,    // For FILL L or FILL XY
+    PixbltMode,  // For PIXBLT operands L, XY, or B
     None
 }
 
@@ -61,6 +62,11 @@ const isFlag = (op: string): boolean => op === '0' || op === '1';
 const isFillMode = (op: string): boolean => {
     const upperOp = op.toUpperCase();
     return upperOp === 'L' || upperOp === 'XY';
+};
+
+const isPixbltMode = (op: string): boolean => {
+    const upperOp = op.toUpperCase();
+    return upperOp === 'L' || upperOp === 'XY' || upperOp === 'B';
 };
 
 // Checks if a string has the format of a label (doesn't check if defined)
@@ -159,7 +165,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['DRAV',   { operands: [OperandType.Register, OperandType.Register], syntax: "DRAV Rs, Rd", opcode: "1111 011S SSSR DDDD", requireSameRegisterPage: true, description: "Draw and advance." }],
     ['FILL',   { operands: [OperandType.FillMode], syntax: "FILL L | FILL XY", opcode: "L: 0000 1111 1100 0000\nXY: 0000 1111 1110 0000", description: "Fill a pixel array." }],
     ['LINE',   { operands: [OperandType.Flag], syntax: "LINE [0|1]", opcode: "0: 0DF1Ah\n1: 0DF9Ah", minOperands: 0, description: "Initiate a line draw operation." }],
-    ['PIXBLT', { operands: [OperandType.Label, OperandType.Label], syntax: "PIXBLT mode, mode", opcode: "(various)", description: "Pixel Block Transfer." }],
+    ['PIXBLT', { operands: [OperandType.PixbltMode, OperandType.PixbltMode], syntax: "PIXBLT mode, mode", opcode: "(various)", description: "Pixel Block Transfer." }],
     ['PIXT',   { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "PIXT src, dest", opcode: "(various)", description: "Pixel Transfer." }],
     ['CALL',  { operands: [OperandType.RegisterOrLabel], syntax: "CALL Rs | CALL Label", opcode: "0000 1001 001R DDDD", description: "Call a subroutine." }],
     ['CALLA', { operands: [OperandType.Label], syntax: "CALLA Address", opcode: "0000 1101 0101 1111", description: "Call subroutine at an absolute address." }],
@@ -282,6 +288,10 @@ export function activate(context: vscode.ExtensionContext) {
                                 return createLabelSuggestions();
                             case OperandType.Flag:
                                 return [new vscode.CompletionItem('0'), new vscode.CompletionItem('1')];
+                            case OperandType.FillMode:
+                                return [new vscode.CompletionItem('L'), new vscode.CompletionItem('XY')];
+                            case OperandType.PixbltMode:
+                                return [new vscode.CompletionItem('L'), new vscode.CompletionItem('XY'), new vscode.CompletionItem('B')];
                         }
                     }
                 }
@@ -476,6 +486,8 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                     case OperandType.Immediate: isValid = isConstant(operandValue) || checkLabel(operandValue); break;
                     case OperandType.Constant: isValid = isConstant(operandValue); break;
                     case OperandType.Flag: isValid = isFlag(operandValue); break;
+                    case OperandType.FillMode: isValid = isFillMode(operandValue); break;
+                    case OperandType.PixbltMode: isValid = isPixbltMode(operandValue); break;
                     case OperandType.Label:
                         isValid = checkLabel(operandValue);
                         if (isLabelFormat(operandValue) && !isValid) {
@@ -488,7 +500,6 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                     case OperandType.Addressable: isValid = isRegister(operandValue) || isAddress(operandValue); break;
                     case OperandType.RegisterOrConstant: isValid = isRegister(operandValue) || isConstant(operandValue); break;
                     case OperandType.RegisterOrLabel: isValid = isRegister(operandValue) || checkLabel(operandValue); break;
-                    case OperandType.FillMode: isValid = isFillMode(operandValue); break;
                 }
                 
                 if (!isValid) {
