@@ -30,8 +30,11 @@ interface InstructionRule {
 
 // --- Validation Helper Functions ---
 
-const A_REGISTERS = new Set(['A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10', 'A11', 'A12', 'A13', 'A14', 'SP']);
-const B_REGISTERS = new Set(['B0', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B14', 'FP']);
+const A_REGISTERS_ORDERED = ['A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10', 'A11', 'A12', 'A13', 'A14', 'SP'];
+const B_REGISTERS_ORDERED = ['B0', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B14', 'FP'];
+
+const A_REGISTERS = new Set(A_REGISTERS_ORDERED);
+const B_REGISTERS = new Set(B_REGISTERS_ORDERED);
 const OTHER_REGISTERS = new Set(['ST', 'PC', 'IOSTAT', 'CTRL1', 'CTRL2', 'HSTADR', 'HSTDATA', 'HSTCTL', 'INTPEND', 'INTENB', 'DPYCTL', 'DPYSTRT', 'DPYADR', 'VCOUNT', 'HCOUNT', 'PFILL', 'PLINE', 'CONVSP', 'CONVDP', 'PSIZE', 'PMOVE', 'SADDR', 'SCOUNT', 'DADDR', 'DCOUNT', 'OFFSET', 'WINDOW', 'WSTART', 'WEND', 'DYDX', 'COLOR0', 'COLOR1']);
 const TMS34010_REGISTERS = new Set([...A_REGISTERS, ...B_REGISTERS, ...OTHER_REGISTERS]);
 
@@ -361,19 +364,11 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
             const index = text.indexOf(symbol);
             return index >= 0 ? new vscode.Range(lineIndex, index, lineIndex, index + symbol.length) : null;
         };
-
+        
         const trimmedText = text.trim();
         const parts = trimmedText.split(/\s+/);
         const firstWord = parts[0];
 
-        if (firstWord && !KNOWN_INSTRUCTIONS.has(firstWord.toUpperCase()) && !KNOWN_DIRECTIVES.has(firstWord.toLowerCase()) && !firstWord.endsWith(':')) {
-            const labelName = firstWord.toUpperCase();
-            const currentRange = symbolRange(firstWord);
-             if (currentRange && !definedSymbols.has(labelName)) {
-                definedSymbols.set(labelName, currentRange);
-            }
-        }
-        
         const equateMatch = text.trim().match(/^([a-zA-Z_][a-zA-Z0-9_]+)\s+\.(equ|set)\s+/i);
         if (equateMatch) {
             const equateName = equateMatch[1].toUpperCase();
@@ -387,6 +382,12 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                 } else {
                     definedSymbols.set(equateName, currentRange);
                 }
+            }
+        } else if (firstWord && !KNOWN_INSTRUCTIONS.has(firstWord.toUpperCase()) && !KNOWN_DIRECTIVES.has(firstWord.toLowerCase())) {
+            const labelName = firstWord.toUpperCase();
+            const currentRange = symbolRange(firstWord);
+             if (currentRange && !definedSymbols.has(labelName)) {
+                definedSymbols.set(labelName, currentRange);
             }
         }
     }
