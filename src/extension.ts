@@ -13,6 +13,7 @@ enum OperandType {
     Flag,        // Represents a 0 or 1 flag
     FillMode,    // For FILL L or FILL XY
     PixbltMode,  // For PIXBLT operands L, XY, or B
+    RegisterList, // For MMTM/MMFM
     None
 }
 
@@ -153,8 +154,8 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['XORI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "XORI IL, Rd", opcode: "0000 1011 1101 0R DDDD", hasOptionalFieldSize: true, description: "Logical XOR of immediate value and register." }],
     ['ZEXT',  { operands: [OperandType.Register, OperandType.Flag], syntax: "ZEXT Rd, F", opcode: "0000 1101 F100 001R DDDD", minOperands: 1, description: "Zero extend a field within a register." }],
     ['MOVE',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MOVE src, dest", opcode: "(various)", hasOptionalFieldSize: true, description: "Move data between registers and/or memory." }],
-    ['MMFM',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MMFM Rs, [List]", opcode: "0000 1001 101R DDDD", description: "Move multiple registers from memory." }],
-    ['MMTM',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MMTM Rs, [List]", opcode: "0000 1001 100R DDDD", description: "Move multiple registers to memory." }],
+    ['MMFM',  { operands: [OperandType.Register, OperandType.RegisterList], syntax: "MMFM Rp, register_list", opcode: "0000 1001 101R DDDD", description: "Move multiple registers from memory." }],
+    ['MMTM',  { operands: [OperandType.Register, OperandType.RegisterList], syntax: "MMTM Rp, register_list", opcode: "0000 1001 100R DDDD", description: "Move multiple registers to memory." }],
     ['MOVB',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MOVB src, dest", opcode: "(various)", description: "Move a byte between registers and/or memory." }],
     ['MOVI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "MOVI IW/IL, Rd", hasOptionalFieldSize:true, opcode: "IW: 0000 1001 110R DDDD\nIL: 0000 1001 111R DDDD", description: "Move an immediate value into a register." }],
     ['MOVK',  { operands: [OperandType.Constant, OperandType.Register], syntax: "MOVK K, Rd", opcode: "0001 10KK KKKR DDDD", description: "Move a constant (1-32) into a register." }],
@@ -238,17 +239,6 @@ export function activate(context: vscode.ExtensionContext) {
                 if (INSTRUCTION_RULES.has(mnemonic)) {
                     const rule = INSTRUCTION_RULES.get(mnemonic)!;
                     const commaCount = (linePrefix.match(/,/g) || []).length;
-
-                    // Suggest Field Size
-                    if (rule.hasOptionalFieldSize && commaCount === rule.operands.length) {
-                        const items: vscode.CompletionItem[] = [];
-                        for (let i = 0; i <= 31; i++) {
-                            const item = new vscode.CompletionItem(String(i), vscode.CompletionItemKind.Constant);
-                            item.detail = `Field Size ${i}`;
-                            items.push(item);
-                        }
-                        return items;
-                    }
                     
                     const currentOperandIndex = commaCount;
                     if (currentOperandIndex < rule.operands.length) {
@@ -265,9 +255,9 @@ export function activate(context: vscode.ExtensionContext) {
                             const labels: vscode.CompletionItem[] = [];
                             for (let i = 0; i < document.lineCount; i++) {
                                 const text = document.lineAt(i).text;
-                                const labelMatch = text.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*):/);
+                                const labelMatch = text.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)/);
                                 const equateMatch = text.trim().match(/^([a-zA-Z_][a-zA-Z0-9_]+)\s+\.(equ|set)\s+/i);
-                                if (labelMatch) {
+                                if (labelMatch && !KNOWN_INSTRUCTIONS.has(labelMatch[1].toUpperCase()) && !KNOWN_DIRECTIVES.has(labelMatch[1].toLowerCase())) {
                                     labels.push(new vscode.CompletionItem(labelMatch[1], vscode.CompletionItemKind.Reference));
                                 }
                                 if (equateMatch) {
@@ -282,6 +272,7 @@ export function activate(context: vscode.ExtensionContext) {
                             case OperandType.RegisterOrConstant:
                             case OperandType.RegisterOrLabel:
                             case OperandType.Addressable:
+                            case OperandType.RegisterList:
                                 return createRegisterSuggestions();
                             case OperandType.Label:
                             case OperandType.Immediate:
@@ -371,19 +362,15 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
             return index >= 0 ? new vscode.Range(lineIndex, index, lineIndex, index + symbol.length) : null;
         };
 
-        const labelMatch = text.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*):/);
-        if (labelMatch) {
-            const labelName = labelMatch[1].toUpperCase();
-            const currentRange = symbolRange(labelName);
-            if (currentRange) {
-                if (definedSymbols.has(labelName)) {
-                    const originalRange = definedSymbols.get(labelName)!;
-                    const diagnostic = new vscode.Diagnostic(currentRange, `Duplicate symbol definition: '${labelMatch[1]}'`, vscode.DiagnosticSeverity.Error);
-                    diagnostic.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(doc.uri, originalRange), 'First defined here')];
-                    diagnostics.push(diagnostic);
-                } else {
-                    definedSymbols.set(labelName, currentRange);
-                }
+        const trimmedText = text.trim();
+        const parts = trimmedText.split(/\s+/);
+        const firstWord = parts[0];
+
+        if (firstWord && !KNOWN_INSTRUCTIONS.has(firstWord.toUpperCase()) && !KNOWN_DIRECTIVES.has(firstWord.toLowerCase()) && !firstWord.endsWith(':')) {
+            const labelName = firstWord.toUpperCase();
+            const currentRange = symbolRange(firstWord);
+             if (currentRange && !definedSymbols.has(labelName)) {
+                definedSymbols.set(labelName, currentRange);
             }
         }
         
@@ -414,19 +401,18 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
         
         if (text.length === 0) { continue; }
         
-        text = text.replace(/^\s*([a-zA-Z_][a-zA-Z0-9_]*):/, '').trim();
-        if (text.length === 0) { continue; }
-
-        if (text.match(/^[a-zA-Z_][a-zA-Z0-9_]+\s+\.(equ|set)\s+/i)) {
-             continue;
-        }
-
         const parts = text.split(/\s+/);
-        const mnemonic = parts[0].toUpperCase();
+        let mnemonic = parts[0].toUpperCase();
+        let operandStr = parts.slice(1).join(' ');
+
+        if(definedSymbols.has(mnemonic)){
+            mnemonic = (parts[1] || '').toUpperCase();
+            operandStr = parts.slice(2).join(' ');
+        }
+        if(!mnemonic) continue;
         
         if (KNOWN_INSTRUCTIONS.has(mnemonic)) {
             const rule = INSTRUCTION_RULES.get(mnemonic)!;
-            let operandStr = parts.slice(1).join(' ');
             
             // Smarter operand parsing
             const operandParts = operandStr.split(',').map(s => s.trim());
