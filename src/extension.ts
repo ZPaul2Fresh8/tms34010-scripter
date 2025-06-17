@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 
 // Define operand types for validation
 enum OperandType {
@@ -347,15 +348,12 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(doc => DIAGNOSTIC_COLLECTION.delete(doc.uri)));
 }
 
-function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.DiagnosticCollection): void {
-    if (doc.languageId !== 'tms-assembly') {
-        return;
+async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string, vscode.Range>, processedFiles: Set<string>, diagnostics: vscode.Diagnostic[]): Promise<void> {
+    if (processedFiles.has(doc.uri.toString())) {
+        return; // Avoid circular includes
     }
-
-    const diagnostics: vscode.Diagnostic[] = [];
-    const definedSymbols = new Map<string, vscode.Range>();
+    processedFiles.add(doc.uri.toString());
     
-    // First pass: find all symbol definitions
     for (let lineIndex = 0; lineIndex < doc.lineCount; lineIndex++) {
         const line = doc.lineAt(lineIndex);
         const text = line.text;
@@ -364,7 +362,7 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
             const index = text.indexOf(symbol);
             return index >= 0 ? new vscode.Range(lineIndex, index, lineIndex, index + symbol.length) : null;
         };
-        
+
         const trimmedText = text.trim();
         const parts = trimmedText.split(/\s+/);
         const firstWord = parts[0];
@@ -384,14 +382,39 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
                 }
             }
         } else if (firstWord && !KNOWN_INSTRUCTIONS.has(firstWord.toUpperCase()) && !KNOWN_DIRECTIVES.has(firstWord.toLowerCase())) {
-            const labelName = firstWord.toUpperCase();
-            const currentRange = symbolRange(firstWord);
+            const labelName = firstWord.replace(':', '').toUpperCase();
+            const currentRange = symbolRange(firstWord.replace(':', ''));
              if (currentRange && !definedSymbols.has(labelName)) {
                 definedSymbols.set(labelName, currentRange);
             }
         }
+        
+        const includeMatch = text.trim().match(/^\.include\s+"(.+)"/i);
+        if(includeMatch){
+            const fileName = includeMatch[1];
+            const currentDir = path.dirname(doc.uri.fsPath);
+            const includeUri = vscode.Uri.file(path.join(currentDir, fileName));
+            try {
+                const includedDoc = await vscode.workspace.openTextDocument(includeUri);
+                await parseSymbols(includedDoc, definedSymbols, processedFiles, diagnostics);
+            } catch {
+                 const range = new vscode.Range(lineIndex, line.text.indexOf(fileName), lineIndex, line.text.indexOf(fileName) + fileName.length);
+                 diagnostics.push(new vscode.Diagnostic(range, `Included file not found: ${fileName}`, vscode.DiagnosticSeverity.Error));
+            }
+        }
+    }
+}
+
+async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.DiagnosticCollection): Promise<void> {
+    if (doc.languageId !== 'tms-assembly') {
+        return;
     }
 
+    const diagnostics: vscode.Diagnostic[] = [];
+    const definedSymbols = new Map<string, vscode.Range>();
+    const processedFiles = new Set<string>();
+
+    await parseSymbols(doc, definedSymbols, processedFiles, diagnostics);
     documentSymbolsCache.set(doc.uri.toString(), definedSymbols);
 
     // Second pass: validate instructions
@@ -406,7 +429,7 @@ function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Diagnost
         let mnemonic = parts[0].toUpperCase();
         let operandStr = parts.slice(1).join(' ');
 
-        if(definedSymbols.has(mnemonic)){
+        if(definedSymbols.has(mnemonic.replace(':', ''))){
             mnemonic = (parts[1] || '').toUpperCase();
             operandStr = parts.slice(2).join(' ');
         }
