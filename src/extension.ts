@@ -18,6 +18,12 @@ enum OperandType {
     None
 }
 
+type SymbolInfo = {
+    range: vscode.Range;
+    value: string | null;
+    type: 'label' | 'equ' | 'set';
+};
+
 // Define the structure for an instruction's syntax rule
 interface InstructionRule {
     operands: OperandType[];
@@ -198,8 +204,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['JUMP',  { operands: [OperandType.Register], syntax: "JUMP Rs", opcode: "0000 0001 011R SSSS", description: "Jump to the address in a register." }],
     ...['JRP', 'JRLS', 'JRLT', 'JRLE', 'JREQ', 'JRNE', 'JRGT', 'JRGE', 'JRHI', 'JRCC', 'JRCS', 'JRVC', 'JRVS', 'JRPL', 'JRMI', 'JRUC'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc oooooooo", description: `Jump relative if condition '${j.substring(2)}' is met.`}] as [string, InstructionRule]),
     ['JR', {operands: [OperandType.Label], syntax: `JR Address`, opcode: "1100 cccc oooooooo", description: "Jump relative unconditionally."}],
-    ...['JAP', 'JALS', 'JALT', 'JALE', 'JAEQ', 'JANE', 'JAGT', 'JAGE', 'JAHI', 'JACC', 'JACS', 'JAVC', 'JAVS', 'JAPL', 'JAMI', 'JAUC'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc 10000000", description: `Jump absolute if condition '${j.substring(2)}' is met.`}] as [string, InstructionRule]),
-    ['JA', {operands: [OperandType.Label], syntax: `JA Address`, opcode: "1100 cccc 10000000", description: "Jump absolute unconditionally."}],
+    ...['JAP', 'JALS', 'JALT', 'JALE', 'JAEQ', 'JANE', 'JAGT', 'JAGE', 'JAHI', 'JACC', 'JACS', 'JAVC', 'JAVS', 'JAPL', 'JAMI', 'JAUC', 'JA'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc 10000000", description: `Jump absolute if condition '${j.substring(2)}' is met.`}] as [string, InstructionRule]),
     ...['RL', 'SLA', 'SLL', 'SRA', 'SRL'].map(s => [s, {operands: [OperandType.RegisterOrConstant, OperandType.Register], syntax: `${s} K/Rs, Rd`, opcode: `K: 001x xxKK KKK0 DDDD\nRs: 0110 xx0S SSSR DDDD`, hasOptionalFieldSize: true, requireSameRegisterPage: true, description: `Shift or rotate a register.` }] as [string, InstructionRule])
 ]);
 
@@ -220,7 +225,29 @@ const KNOWN_DIRECTIVES = new Set([
 const DIAGNOSTIC_COLLECTION = vscode.languages.createDiagnosticCollection('tms34010');
 
 // A cache to store symbols for each document, used by DefinitionProvider
-const documentSymbolsCache = new Map<string, Map<string, vscode.Range>>();
+const documentSymbolsCache = new Map<string, Map<string, SymbolInfo>>();
+
+function resolveSymbols(operand: string, definedSymbols: Map<string, SymbolInfo>): string {
+    let resolved = operand;
+    // Loop to handle nested aliases, with a limit to prevent infinite loops from circular definitions
+    for (let i = 0; i < 10; i++) {
+        let changedInThisIteration = false;
+        for (const [symbol, info] of definedSymbols.entries()) {
+            if (info.value) {
+                const regex = new RegExp(`\\b${symbol}\\b`, 'gi');
+                if (regex.test(resolved)) {
+                    resolved = resolved.replace(regex, info.value);
+                    changedInThisIteration = true;
+                }
+            }
+        }
+        if (!changedInThisIteration) {
+            break; 
+        }
+    }
+    return resolved;
+}
+
 
 export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
@@ -332,7 +359,7 @@ export function activate(context: vscode.ExtensionContext) {
                 const symbols = documentSymbolsCache.get(document.uri.toString());
 
                 if (symbols && symbols.has(word)) {
-                    return new vscode.Location(document.uri, symbols.get(word)!);
+                    return new vscode.Location(document.uri, symbols.get(word)!.range);
                 }
 
                 return undefined;
@@ -348,7 +375,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(doc => DIAGNOSTIC_COLLECTION.delete(doc.uri)));
 }
 
-async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string, vscode.Range>, processedFiles: Set<string>, diagnostics: vscode.Diagnostic[]): Promise<void> {
+async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string, SymbolInfo>, processedFiles: Set<string>, diagnostics: vscode.Diagnostic[]): Promise<void> {
     if (processedFiles.has(doc.uri.toString())) {
         return; // Avoid circular includes
     }
@@ -367,25 +394,28 @@ async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string
         const parts = trimmedText.split(/\s+/);
         const firstWord = parts[0];
 
-        const equateMatch = text.trim().match(/^([a-zA-Z_][a-zA-Z0-9_]+)\s+\.(equ|set)\s+/i);
+        const equateMatch = text.trim().match(/^([a-zA-Z_][a-zA-Z0-9_]+)\s+\.(equ|set)\s+(.+)/i);
         if (equateMatch) {
             const equateName = equateMatch[1].toUpperCase();
-            const currentRange = symbolRange(equateName);
+            const directiveType = equateMatch[2].toLowerCase() as 'equ' | 'set';
+            const value = equateMatch[3];
+            const currentRange = symbolRange(equateMatch[1]);
             if (currentRange) {
-                if (definedSymbols.has(equateName)) {
-                    const originalRange = definedSymbols.get(equateName)!;
+                const existingSymbol = definedSymbols.get(equateName);
+                if (existingSymbol && existingSymbol.type !== 'set') {
+                    const originalRange = existingSymbol.range;
                     const diagnostic = new vscode.Diagnostic(currentRange, `Duplicate symbol definition: '${equateMatch[1]}'`, vscode.DiagnosticSeverity.Error);
                     diagnostic.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(doc.uri, originalRange), 'First defined here')];
                     diagnostics.push(diagnostic);
                 } else {
-                    definedSymbols.set(equateName, currentRange);
+                    definedSymbols.set(equateName, { range: currentRange, value: value, type: directiveType });
                 }
             }
         } else if (firstWord && !KNOWN_INSTRUCTIONS.has(firstWord.toUpperCase()) && !KNOWN_DIRECTIVES.has(firstWord.toLowerCase())) {
             const labelName = firstWord.replace(':', '').toUpperCase();
             const currentRange = symbolRange(firstWord.replace(':', ''));
              if (currentRange && !definedSymbols.has(labelName)) {
-                definedSymbols.set(labelName, currentRange);
+                definedSymbols.set(labelName, { range: currentRange, value: null, type: 'label'});
             }
         }
         
@@ -411,7 +441,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
     }
 
     const diagnostics: vscode.Diagnostic[] = [];
-    const definedSymbols = new Map<string, vscode.Range>();
+    const definedSymbols = new Map<string, SymbolInfo>();
     const processedFiles = new Set<string>();
 
     await parseSymbols(doc, definedSymbols, processedFiles, diagnostics);
@@ -485,7 +515,8 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
             }
 
             for (let i = 0; i < operands.length; i++) {
-                const operandValue = operands[i];
+                const originalOperandValue = operands[i];
+                let operandValue = resolveSymbols(originalOperandValue, definedSymbols);
                 const expectedType = rule.operands[i];
                 let isValid = false;
 
@@ -498,6 +529,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                     case OperandType.Flag: isValid = isFlag(operandValue); break;
                     case OperandType.FillMode: isValid = isFillMode(operandValue); break;
                     case OperandType.PixbltMode: isValid = isPixbltMode(operandValue); break;
+                    case OperandType.RegisterList: isValid = true; break; // Handled separately
                     case OperandType.Label:
                         isValid = checkLabel(operandValue);
                         if (isLabelFormat(operandValue) && !isValid) {
@@ -513,9 +545,9 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                 }
                 
                 if (!isValid) {
-                    let operandStartIndex = lineWithoutComment.lastIndexOf(operandValue);
+                    let operandStartIndex = lineWithoutComment.lastIndexOf(originalOperandValue);
                     if (operandStartIndex === -1) { operandStartIndex = line.firstNonWhitespaceCharacterIndex; }
-                    const range = new vscode.Range(lineIndex, operandStartIndex, lineIndex, operandStartIndex + operandValue.length);
+                    const range = new vscode.Range(lineIndex, operandStartIndex, lineIndex, operandStartIndex + originalOperandValue.length);
                     diagnostics.push(new vscode.Diagnostic(range, `Invalid type for operand ${i + 1} of ${mnemonic}.`, vscode.DiagnosticSeverity.Error));
                 } else if (isAddress(operandValue)) {
                     const offsetMatch = operandValue.match(/\((.+)\)/);

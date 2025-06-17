@@ -1,4 +1,4 @@
-# tms34010-scripter README
+# TMS34010 Scripter README
 
 This is an extension for Visual Studio Code for syntax validation for the Texas Instruments TI34010 processor.
 
@@ -6,7 +6,8 @@ This is an extension for Visual Studio Code for syntax validation for the Texas 
 
 A basic syntax checker with some assistance in writing script with autocomplete.
 
-> Future improvements might include directives and linking.
+Supported Directives:
+> .include, .set, .equ
 
 ## Requirements
 
