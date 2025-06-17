@@ -4,35 +4,36 @@ This is an extension for Visual Studio Code for syntax validation for the Texas 
 
 ## Features
 
-A basic syntax checker with some assistance in writing script with autocomplete.
+    A basic syntax checker with some assistance in writing script with autocomplete.
 
-Supported Directives:
-> .include, .set, .equ
+    - Autocomplete
+    - Directive Support
+    - Datatype
 
-## Requirements
-
-Just this extension and some TMS34010 assembly code!
-
-## Extension Settings
-
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
-
-For example:
-
-This extension contributes the following settings:
-
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
 
 ## Known Issues
 
-Jumps to labels not complete. Currently labels are defined by their name and a colon as a postfix. Thinking about changing this to NOT have the colon to follow existing code sources which use a tabbing to indicate code from labels which start at column 0.
 MMTM and MMFM no yet implemented as well as the less popular pixel blitter instructions.
 
 ## Release Notes
 
-Non-release.
-
-### 1.0.0
+ Non-release.
+ 
+ ### 1.0.0
 
 Work In Progress
+ 
+## Syntax
+
+ ### Directives
+**Equates**<br>
+Used to assign a static value, these cannot be changed.<br>
+*Example* `FLAG_A  .equ 1`
+
+**Sets**<br>
+Much like equates, used to set variables but unlike equates these can re-assigned at any time.<br>
+*Example:* `myAlias .set A0` This is give register **A0** the alias of **myAlias**
+
+**Inclusions**<br>
+Use this at the top of your code to make use of equates, labels and other data types from the specified file.<br>
+*Example:* `.include test.asm`
