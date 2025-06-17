@@ -8,12 +8,12 @@ This is an extension for Visual Studio Code for syntax validation for the Texas 
 
     - Autocomplete
     - Directive Support
-    - Datatype
+    - Datatype Variations
 
 
 ## Known Issues
 
-MMTM and MMFM no yet implemented as well as the less popular pixel blitter instructions.
+MMTM and MMFM no yet implemented as well as the less popular PIXT instructions.
 
 ## Release Notes
 
@@ -21,9 +21,20 @@ MMTM and MMFM no yet implemented as well as the less popular pixel blitter instr
  
  ### 1.0.0
 
-Work In Progress
+Work In Progress - Ideal Roadmap:
+1. Syntax Verification (This)
+2. Binary Building of Opcodes
+3. Linking and Packaging
  
 ## Syntax
+
+### Data Types
+**Decimal**<br>
+5, 100, -50000 etc...<br><br>
+**Hexadecimal**<br>
+40h, >40<br><br>
+**Binary**<br>
+b1001, b10101010
 
  ### Directives
 **Equates**<br>

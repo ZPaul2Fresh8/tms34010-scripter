@@ -27,7 +27,7 @@
         "directives": {
             "patterns": [{
                 "name": "keyword.directive.asm",
-                "match": "(?i)\\.(set|equ|word|long|string|asciiz|byte|field|sint|float|sect|bss|text|data|align|space|global|globl|end|org|def|ref|newblock|cdef|endcdef|clink|cstruct|endstruct|struct|union|tag|eval|emsg|wmsg|fclist|fcnolist|drlist|drnolist|mlist|mnolist|sslist|ssnolist|var|label|version|length|width|option|if|else|endif|include)\\b"
+                "match": "(?i)\\.(set|equ|word|long|string|asciiz|byte|field|sint|float|sect|bss|text|data|align|space|global|globl|end|org|def|ref|newblock|cdef|endcdef|clink|cstruct|endstruct|struct|union|tag|eval|emsg|wmsg|fclist|fcnolist|drlist|drnolist|mlist|mnolist|sslist|ssnolist|var|label|version|length|width|option|if|else|endif|include|file|title)\\b"
             }]
         },
         "registers": {

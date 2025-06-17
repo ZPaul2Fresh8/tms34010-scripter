@@ -52,7 +52,31 @@ const isConstant = (op: string): boolean => {
     if (value.startsWith('#')) {
         value = value.substring(1);
     }
+
+    // Ensure constant is within range 0-31
+    if (parseInt(value) > 31) return false;
+
+    // Hex with 'h' suffix (can be negative)
+    if (/^-?[0-9A-F]+H$/.test(value)) return true;
     
+    // Hex with '>' prefix (cannot be negative)
+    if (/^>[0-9A-F]+$/.test(value)) return true;
+    
+    // Binary with 'b' prefix (cannot be negative)
+    if (/^B[01]+$/.test(value)) return true;
+    
+    // Decimal (can be negative)
+    if (/^-?[0-9]+$/.test(value)) return true;
+    
+    return false;
+};
+
+const isImmediate = (op: string): boolean => {
+    let value = op.toUpperCase();
+    if (value.startsWith('#')) {
+        value = value.substring(1);
+    }
+
     // Hex with 'h' suffix (can be negative)
     if (/^-?[0-9A-F]+H$/.test(value)) return true;
     
@@ -90,7 +114,7 @@ const isAddress = (op: string): boolean => {
     // Absolute address: @>FFFF, @label
     if (op.startsWith('@')) {
         const subOperand = op.substring(1);
-        return isLabelFormat(subOperand) || isConstant(subOperand);
+        return isLabelFormat(subOperand) || isImmediate(subOperand);
     }
     
     // Pre-decrement: -*A0
@@ -184,7 +208,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['DINT',  { operands: [], syntax: "DINT", opcode: "0000 0011 0110 0000", description: "Disable interrupts." }],
     ['EINT',  { operands: [], syntax: "EINT", opcode: "0000 1101 0110 0000", description: "Enable interrupts." }],
     ['EMU',   { operands: [], syntax: "EMU", opcode: "0000 0001 0000 0000", description: "Initiate emulation." }],
-    ['EXGF',  { operands: [OperandType.Register, OperandType.Constant], syntax: "EXGF Rd, F", opcode: "1101 01F1 F00R DDDD", description: "Exchange field size." }],
+    ['EXGF',  { operands: [OperandType.Register, OperandType.Flag], syntax: "EXGF Rd, F", opcode: "1101 01F1 F00R DDDD", description: "Exchange field size." }],
     ['EXGPC', { operands: [OperandType.Register], syntax: "EXGPC Rd", opcode: "0000 0001 001R DDDD", description: "Exchange Program Counter with a register." }],
     ['GETPC', { operands: [OperandType.Register], syntax: "GETPC Rd", opcode: "0000 0001 010R DDDD", description: "Get the value of the Program Counter." }],
     ['GETST', { operands: [OperandType.Register], syntax: "GETST Rd", opcode: "0000 0001 100R DDDD", description: "Get the value of the Status Register." }],
@@ -219,7 +243,7 @@ const KNOWN_DIRECTIVES = new Set([
     '.struct', '.union', '.tag', '.eval', '.emsg', '.wmsg', '.fclist', '.fcnolist',
     '.drlist', '.drnolist', '.mlist', '.mnolist', '.sslist', '.ssnolist', '.var',
     '.label', '.version', '.length', '.width', 'option',
-    '.if', '.else', '.endif', '.include'
+    '.if', '.else', '.endif', '.include', '.file', '.title'
 ]);
 
 const DIAGNOSTIC_COLLECTION = vscode.languages.createDiagnosticCollection('tms34010');
@@ -524,7 +548,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
 
                 switch (expectedType) {
                     case OperandType.Register: isValid = isRegister(operandValue); break;
-                    case OperandType.Immediate: isValid = isConstant(operandValue) || checkLabel(operandValue); break;
+                    case OperandType.Immediate: isValid = isImmediate(operandValue) || checkLabel(operandValue); break;
                     case OperandType.Constant: isValid = isConstant(operandValue); break;
                     case OperandType.Flag: isValid = isFlag(operandValue); break;
                     case OperandType.FillMode: isValid = isFillMode(operandValue); break;
@@ -553,7 +577,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                     const offsetMatch = operandValue.match(/\((.+)\)/);
                     if (offsetMatch) {
                         const offsetValue = offsetMatch[1];
-                        if (!isConstant(offsetValue) && !definedSymbols.has(offsetValue.toUpperCase())) {
+                        if (!isImmediate(offsetValue) && !definedSymbols.has(offsetValue.toUpperCase())) {
                             const offsetStartIndex = lineWithoutComment.indexOf(offsetValue);
                             const range = new vscode.Range(lineIndex, offsetStartIndex, lineIndex, offsetStartIndex + offsetValue.length);
                             diagnostics.push(new vscode.Diagnostic(range, `Undefined symbol used in offset: '${offsetValue}'`, vscode.DiagnosticSeverity.Error));
