@@ -1,7 +1,6 @@
 // This file contains the "database" for the TMS34010 assembly language.
-// Separating it from extension.ts makes the main logic file cleaner.
 
-// Define the different categories of operands our language supports.
+// Defines the different categories of operands our language supports.
 export enum OperandType {
     Register,
     Immediate,
@@ -29,9 +28,8 @@ export interface InstructionRule {
     minOperands?: number;
 }
 
-// Pre-defined sets of registers for quick lookup.
-const A_REGISTERS_ORDERED = ['A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10', 'A11', 'A12', 'A13', 'A14', 'SP'];
-const B_REGISTERS_ORDERED = ['B0', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B14', 'FP'];
+export const A_REGISTERS_ORDERED = ['A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10', 'A11', 'A12', 'A13', 'A14', 'SP'];
+export const B_REGISTERS_ORDERED = ['B0', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B14', 'FP'];
 
 export const A_REGISTERS = new Set(A_REGISTERS_ORDERED);
 export const B_REGISTERS = new Set(B_REGISTERS_ORDERED);
@@ -111,7 +109,7 @@ export const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['RETI',  { operands: [], syntax: "RETI", opcode: "0000 1001 0100 0000", description: "Return from interrupt." }],
     ['RETS',  { operands: [OperandType.Constant], syntax: "RETS [N]", opcode: "0000 1001 011N NNNN", minOperands: 0, description: "Return from subroutine." }],
     ['REV',   { operands: [OperandType.Register], syntax: "REV Rd", opcode: "0000 0000 001R DDDD", description: "Get the TMS34010 revision level." }],
-    ['SETF',  { operands: [OperandType.Constant, OperandType.Constant, OperandType.Constant], syntax: "SETF FS, FE, F", opcode: "0000 0111 01(FS)(FE)(F)0 0000", description: "Set the field parameters." }],
+    ['SETF',  { operands: [OperandType.Constant, OperandType.Flag], syntax: "SETF FS, FE, F", hasOptionalFieldSize:true, opcode: "0000 0111 01(FS)(FE)(F)0 0000", description: "Set the field parameters." }],
     ['TRAP',  { operands: [OperandType.Constant], syntax: "TRAP N", opcode: "0000 1001 000N NNNN", description: "Software interrupt." }],
     ['DSJ',   { operands: [OperandType.Register, OperandType.Label], syntax: "DSJ Rd, Address", opcode: "0000 1101 1000 DDDD", description: "Decrement and skip if not zero." }],
     ['DSJEQ', { operands: [OperandType.Register, OperandType.Label], syntax: "DSJEQ Rd, Address", opcode: "0000 1101 1010 DDDD", description: "Decrement and skip if equal." }],

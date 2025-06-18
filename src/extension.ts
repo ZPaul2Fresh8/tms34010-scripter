@@ -8,7 +8,9 @@ import {
     KNOWN_DIRECTIVES,
     TMS34010_REGISTERS,
     A_REGISTERS,
-    B_REGISTERS
+    B_REGISTERS,
+    A_REGISTERS_ORDERED,
+    B_REGISTERS_ORDERED
 } from './tms34010-db';
 
 type SymbolInfo = {
@@ -84,24 +86,15 @@ function resolveSymbols(operand: string, definedSymbols: Map<string, SymbolInfo>
         const symbolNames = Array.from(definedSymbols.keys());
         if (symbolNames.length === 0) break;
 
-        // If the entire operand is a symbol, replace it without parentheses
-        if (symbolNames.includes(resolved)) {
-            const symbolInfo = definedSymbols.get(resolved);
-            if (symbolInfo && symbolInfo.value) {
-                // Recursively resolve in case the value is another alias
-                return resolveSymbols(symbolInfo.value, definedSymbols);
-            }
-        }
-        
-        // Otherwise, replace symbols as part of a larger expression
         const regex = new RegExp(`\\b(${symbolNames.join('|')})\\b`, 'g');
+        
         const newResolved = resolved.replace(regex, (match) => {
             const symbolInfo = definedSymbols.get(match);
             if (symbolInfo && symbolInfo.value) {
                 changed = true;
-                return `(${symbolInfo.value})`; 
+                return symbolInfo.value;
             }
-            return match;
+            return match; 
         });
 
         if (!changed) break;
@@ -384,14 +377,39 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
         const operandStr = parts.slice(mnemonicIndex + 1).join(' ');
         const upperMnemonic = mnemonic.toUpperCase();
         
+        if (upperMnemonic === 'MMTM' || upperMnemonic === 'MMFM') {
+            // **FIX**: Special parsing for MMTM/MMFM operands.
+            const firstCommaIndex = operandStr.indexOf(',');
+            if (firstCommaIndex === -1) {
+                const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
+                diagnostics.push(new vscode.Diagnostic(range, `${upperMnemonic} requires 2 operands: a source/destination register and a register list.`, vscode.DiagnosticSeverity.Error));
+                continue;
+            }
+
+            const regOperand = operandStr.substring(0, firstCommaIndex).trim();
+            const listOperand = operandStr.substring(firstCommaIndex + 1).trim();
+
+            if (!isRegister(regOperand)) {
+                const index = lineWithoutComment.indexOf(regOperand);
+                const range = new vscode.Range(lineIndex, index, lineIndex, index + regOperand.length);
+                diagnostics.push(new vscode.Diagnostic(range, `Invalid register operand for ${upperMnemonic}.`, vscode.DiagnosticSeverity.Error));
+            }
+
+            validateRegisterList(listOperand, lineIndex, lineWithoutComment, diagnostics);
+            continue; // Skip to next line
+        }
+        
         if (KNOWN_INSTRUCTIONS.has(upperMnemonic)) {
             const rule = INSTRUCTION_RULES.get(upperMnemonic)!;
             const operandParts = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
             
             const minOps = rule.minOperands ?? rule.operands.length;
-            if (operandParts.length < minOps || operandParts.length > rule.operands.length) {
+            const maxOps = rule.hasOptionalFieldSize ? rule.operands.length + 1 : rule.operands.length;
+
+            if (operandParts.length < minOps || operandParts.length > maxOps) {
                 const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, lineWithoutComment.trimRight().length);
-                diagnostics.push(new vscode.Diagnostic(range, `Invalid operand count for ${upperMnemonic}. Expected ${minOps} to ${rule.operands.length}, but got ${operandParts.length}.`, vscode.DiagnosticSeverity.Error));
+                const expected = minOps === maxOps ? minOps : `${minOps} to ${maxOps}`;
+                diagnostics.push(new vscode.Diagnostic(range, `Invalid operand count for ${upperMnemonic}. Expected ${expected}, but got ${operandParts.length}.`, vscode.DiagnosticSeverity.Error));
                 continue;
             }
             
@@ -410,6 +428,14 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                 currentSearchIndex = operandStartIndex + originalOperandValue.length;
                 
                 const operandValue = resolveSymbols(originalOperandValue, definedSymbols);
+                
+                if (rule.hasOptionalFieldSize && i === rule.operands.length) {
+                    if (!isFlag(operandValue)) {
+                        diagnostics.push(new vscode.Diagnostic(accurateRange, `Invalid field size operand for ${upperMnemonic}. Expected 0 or 1.`, vscode.DiagnosticSeverity.Error));
+                    }
+                    continue; 
+                }
+
                 const expectedType = rule.operands[i];
                 let isValid = false;
                 
@@ -418,13 +444,17 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                 switch (expectedType) {
                     case OperandType.Register: isValid = isRegister(operandValue); break;
                     case OperandType.Immediate:
-                        const evalResult = evaluateSymbolicExpression(operandValue, definedSymbols);
-                        isValid = evalResult.value !== null;
-                        if (!isValid && evalResult.errorSymbol) {
-                            const symInfo = definedSymbols.get(evalResult.errorSymbol);
-                            const symType = symInfo ? `a memory location defined by .${symInfo.type}` : 'an undefined symbol';
-                            diagnostics.push(new vscode.Diagnostic(accurateRange, `Symbol '${evalResult.errorSymbol}' is ${symType} and cannot be used in this expression.`, vscode.DiagnosticSeverity.Error));
-                            continue;
+                        if (isImmediate(operandValue)) {
+                            isValid = true;
+                        } else {
+                            const evalResult = evaluateSymbolicExpression(operandValue, definedSymbols);
+                            isValid = evalResult.value !== null;
+                            if (!isValid && evalResult.errorSymbol) {
+                                const symInfo = definedSymbols.get(evalResult.errorSymbol);
+                                const symType = symInfo ? `a memory location defined by .${symInfo.type}` : 'an undefined symbol';
+                                diagnostics.push(new vscode.Diagnostic(accurateRange, `Symbol '${evalResult.errorSymbol}' is ${symType} and cannot be used in this expression.`, vscode.DiagnosticSeverity.Error));
+                                continue;
+                            }
                         }
                         break;
                     case OperandType.Constant: isValid = isConstant(operandValue); break;
@@ -507,5 +537,68 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
     
     collection.set(doc.uri, diagnostics);
 }
+
+function validateRegisterList(listStr: string, lineIndex: number, lineText: string, diagnostics: vscode.Diagnostic[]) {
+    const listRange = new vscode.Range(lineIndex, lineText.indexOf(listStr), lineIndex, lineText.indexOf(listStr) + listStr.length);
+    let finalRegs: string[] = [];
+
+    const parts = listStr.split(',').map(p => p.trim());
+    for (const part of parts) {
+        const rangeMatch = part.match(/^([AB][0-9]{1,2}|SP|FP)-([AB][0-9]{1,2}|SP|FP)$/i);
+        if (rangeMatch) {
+            const startReg = rangeMatch[1].toUpperCase();
+            const endReg = rangeMatch[2].toUpperCase();
+            const isAReg = A_REGISTERS.has(startReg);
+            const isBReg = B_REGISTERS.has(startReg);
+
+            if (isAReg !== A_REGISTERS.has(endReg) || isBReg !== B_REGISTERS.has(endReg)) {
+                diagnostics.push(new vscode.Diagnostic(listRange, 'Register range must be within the same file (A or B).', vscode.DiagnosticSeverity.Error));
+                return;
+            }
+
+            const sourceList = isAReg ? A_REGISTERS_ORDERED : B_REGISTERS_ORDERED;
+            const startIndex = sourceList.indexOf(startReg);
+            const endIndex = sourceList.indexOf(endReg);
+
+            if (startIndex === -1 || endIndex === -1 || startIndex > endIndex) {
+                diagnostics.push(new vscode.Diagnostic(listRange, `Invalid register range: '${part}'.`, vscode.DiagnosticSeverity.Error));
+                return;
+            }
+            finalRegs.push(...sourceList.slice(startIndex, endIndex + 1));
+        } else {
+            finalRegs.push(part.toUpperCase());
+        }
+    }
+
+    if (finalRegs.length === 0) {
+        diagnostics.push(new vscode.Diagnostic(listRange, 'Register list cannot be empty.', vscode.DiagnosticSeverity.Error));
+        return;
+    }
+
+    const isARegList = A_REGISTERS.has(finalRegs[0]);
+    const isBRegList = B_REGISTERS.has(finalRegs[0]);
+    if (!isARegList && !isBRegList) {
+        diagnostics.push(new vscode.Diagnostic(listRange, `Invalid register '${finalRegs[0]}' in list.`, vscode.DiagnosticSeverity.Error));
+        return;
+    }
+    
+    const sourceList = isARegList ? A_REGISTERS_ORDERED : B_REGISTERS_ORDERED;
+    let lastIndex = -1;
+
+    for (const reg of finalRegs) {
+        if ((isARegList && !A_REGISTERS.has(reg)) || (isBRegList && !B_REGISTERS.has(reg))) {
+            diagnostics.push(new vscode.Diagnostic(listRange, 'Cannot mix A and B registers in the same list.', vscode.DiagnosticSeverity.Error));
+            return;
+        }
+
+        const currentIndex = sourceList.indexOf(reg);
+        if (currentIndex <= lastIndex) {
+            diagnostics.push(new vscode.Diagnostic(listRange, 'Registers in list must be in ascending order and unique.', vscode.DiagnosticSeverity.Error));
+            return;
+        }
+        lastIndex = currentIndex;
+    }
+}
+
 
 export function deactivate() {}
