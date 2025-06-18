@@ -14,17 +14,26 @@
     ],
     "main": "./out/extension.js",
     "contributes": {
-        "languages": [{
-            "id": "tms-assembly",
-            "aliases": ["TMS34010 Assembly", "tms-asm"],
-            "extensions": [".asm"],
-            "configuration": "./language-configuration.json"
-        }],
-        "grammars": [{
-            "language": "tms-assembly",
-            "scopeName": "source.asm.tms",
-            "path": "./syntaxes/tms-assembly.tmLanguage.json"
-        }]
+        "languages": [
+            {
+                "id": "tms-assembly",
+                "aliases": [
+                    "TMS34010 Assembly",
+                    "tms-asm"
+                ],
+                "extensions": [
+                    ".asm"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "tms-assembly",
+                "scopeName": "source.asm.tms",
+                "path": "./syntaxes/tms-assembly.tmLanguage.json"
+            }
+        ]
     },
     "scripts": {
         "vscode:prepublish": "npm run compile",
@@ -35,14 +44,18 @@
         "test": "vscode-test"
     },
     "devDependencies": {
-        "@types/vscode": "^1.89.0",
+        "@types/math-expression-evaluator": "^1.3.3",
         "@types/mocha": "^10.0.6",
         "@types/node": "18.x",
+        "@types/vscode": "^1.89.0",
         "@typescript-eslint/eslint-plugin": "^7.7.1",
         "@typescript-eslint/parser": "^7.7.1",
-        "eslint": "^8.57.0",
-        "typescript": "^5.4.5",
         "@vscode/test-cli": "^0.0.9",
-        "@vscode/test-electron": "^2.3.9"
+        "@vscode/test-electron": "^2.3.9",
+        "eslint": "^8.57.0",
+        "typescript": "^5.4.5"
+    },
+    "dependencies": {
+        "math-expression-evaluator": "^2.0.7"
     }
 }
