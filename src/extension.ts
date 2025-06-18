@@ -378,7 +378,6 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
         const upperMnemonic = mnemonic.toUpperCase();
         
         if (upperMnemonic === 'MMTM' || upperMnemonic === 'MMFM') {
-            // **FIX**: Special parsing for MMTM/MMFM operands.
             const firstCommaIndex = operandStr.indexOf(',');
             if (firstCommaIndex === -1) {
                 const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
@@ -396,7 +395,37 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
             }
 
             validateRegisterList(listOperand, lineIndex, lineWithoutComment, diagnostics);
-            continue; // Skip to next line
+            continue; 
+        } else if (upperMnemonic === 'PIXT') {
+            const operandParts = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
+            if (operandParts.length !== 2) {
+                const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
+                diagnostics.push(new vscode.Diagnostic(range, `PIXT requires 2 operands.`, vscode.DiagnosticSeverity.Error));
+                continue;
+            }
+
+            const isValidPixtOperand = (op: string): boolean => {
+                if (isRegister(op) || isAddress(op)) {
+                    return true;
+                }
+                if (op.toUpperCase().match(/^\*(A[0-9]{1,2}|B[0-9]{1,2}|SP|FP)\.XY$/)) {
+                    return true;
+                }
+                return false;
+            };
+
+            for (const originalOperand of operandParts) {
+                const resolvedOperand = resolveSymbols(originalOperand, definedSymbols);
+                if (!isValidPixtOperand(resolvedOperand)) {
+                    const index = lineWithoutComment.indexOf(originalOperand);
+                    const range = new vscode.Range(lineIndex, index, lineIndex, index + originalOperand.length);
+                    const message = originalOperand === resolvedOperand
+                        ? `Invalid operand '${originalOperand}' for PIXT.`
+                        : `Invalid operand '${originalOperand}' (resolved to '${resolvedOperand}') for PIXT.`;
+                    diagnostics.push(new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Error));
+                }
+            }
+            continue;
         }
         
         if (KNOWN_INSTRUCTIONS.has(upperMnemonic)) {
