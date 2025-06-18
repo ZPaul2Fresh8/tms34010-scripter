@@ -103,6 +103,7 @@ function resolveSymbols(operand: string, definedSymbols: Map<string, SymbolInfo>
     return resolved;
 }
 
+
 function evaluateSymbolicExpression(expression: string, definedSymbols: Map<string, SymbolInfo>): EvaluationResult {
     let resolved = resolveSymbols(expression, definedSymbols);
     
@@ -313,7 +314,7 @@ async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string
         const text = line.text;
         const trimmedText = text.trim();
         
-        if (trimmedText.length === 0 || trimmedText.startsWith(';') || trimmedText.match(/^\.include/i)) {
+        if (trimmedText.length === 0 || trimmedText.startsWith(';') || trimmedText.startsWith('*') || trimmedText.match(/^\.include/i)) {
             continue;
         }
 
@@ -359,7 +360,10 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
         const lineWithoutComment = line.text.split(';')[0];
         const text = lineWithoutComment.trim();
         
-        if (text.length === 0) continue;
+        // **NEW**: Ignore lines that start with an asterisk for comments
+        if (text.length === 0 || text.startsWith('*')) {
+            continue;
+        }
         
         const parts = text.split(/\s+/);
         const mnemonicIndex = parts.findIndex(p => KNOWN_INSTRUCTIONS.has(p.toUpperCase()) || KNOWN_DIRECTIVES.has(p.toLowerCase()));
@@ -628,6 +632,5 @@ function validateRegisterList(listStr: string, lineIndex: number, lineText: stri
         lastIndex = currentIndex;
     }
 }
-
 
 export function deactivate() {}
