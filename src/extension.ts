@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 
-// Define operand types for validation
+// Define the different categories of operands our language supports.
+// This helps us classify and validate them later.
 enum OperandType {
     Register,
     Immediate,
@@ -18,25 +19,28 @@ enum OperandType {
     None
 }
 
+// Defines the structure for storing information about a symbol (label, equate, etc.).
 type SymbolInfo = {
-    range: vscode.Range;
-    value: string | null;
-    type: 'label' | 'equ' | 'set';
+    range: vscode.Range; // Where the symbol is defined in the code.
+    value: string | null; // The value of the symbol (for .equ or .set).
+    type: 'label' | 'equ' | 'set' | 'bss'; // The type of symbol.
 };
 
-// Define the structure for an instruction's syntax rule
+// Defines the structure for an instruction's syntax rule.
+// This is the blueprint for how each instruction should be written.
 interface InstructionRule {
-    operands: OperandType[];
-    syntax: string;
-    opcode: string;
-    description: string;
-    hasOptionalFieldSize?: boolean;
-    requireSameRegisterPage?: boolean;
-    minOperands?: number;
+    operands: OperandType[]; // An array of expected operand types.
+    syntax: string;          // A human-readable syntax guide.
+    opcode: string;          // The machine code format.
+    description: string;     // A description of what the instruction does.
+    hasOptionalFieldSize?: boolean; // Whether the instruction can have a field size suffix.
+    requireSameRegisterPage?: boolean; // Whether register operands must be from the same file (A or B).
+    minOperands?: number;   // The minimum number of operands required.
 }
 
 // --- Validation Helper Functions ---
 
+// Pre-defined sets of registers for quick lookup.
 const A_REGISTERS_ORDERED = ['A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10', 'A11', 'A12', 'A13', 'A14', 'SP'];
 const B_REGISTERS_ORDERED = ['B0', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11', 'B12', 'B13', 'B14', 'FP'];
 
@@ -45,70 +49,53 @@ const B_REGISTERS = new Set(B_REGISTERS_ORDERED);
 const OTHER_REGISTERS = new Set(['ST', 'PC', 'IOSTAT', 'CTRL1', 'CTRL2', 'HSTADR', 'HSTDATA', 'HSTCTL', 'INTPEND', 'INTENB', 'DPYCTL', 'DPYSTRT', 'DPYADR', 'VCOUNT', 'HCOUNT', 'PFILL', 'PLINE', 'CONVSP', 'CONVDP', 'PSIZE', 'PMOVE', 'SADDR', 'SCOUNT', 'DADDR', 'DCOUNT', 'OFFSET', 'WINDOW', 'WSTART', 'WEND', 'DYDX', 'COLOR0', 'COLOR1']);
 const TMS34010_REGISTERS = new Set([...A_REGISTERS, ...B_REGISTERS, ...OTHER_REGISTERS]);
 
+// Checks if a given string is a valid register name.
 const isRegister = (op: string): boolean => TMS34010_REGISTERS.has(op.toUpperCase());
 
+// Checks if a given string is a valid constant (1-32).
 const isConstant = (op: string): boolean => {
     let value = op.toUpperCase();
     if (value.startsWith('#')) {
         value = value.substring(1);
     }
-
-    // Ensure constant is within range 0-31
-    if (parseInt(value) > 31) return false;
-
-    // Hex with 'h' suffix (can be negative)
-    if (/^-?[0-9A-F]+H$/.test(value)) return true;
-    
-    // Hex with '>' prefix (cannot be negative)
-    if (/^>[0-9A-F]+$/.test(value)) return true;
-    
-    // Binary with 'b' prefix (cannot be negative)
-    if (/^B[01]+$/.test(value)) return true;
-    
-    // Decimal (can be negative)
-    if (/^-?[0-9]+$/.test(value)) return true;
-    
-    return false;
+    const numValue = parseInt(value, 10);
+    return !isNaN(numValue) && numValue >= 1 && numValue <= 31;
 };
 
+// Checks if a given string is a valid immediate value (any number).
 const isImmediate = (op: string): boolean => {
     let value = op.toUpperCase();
     if (value.startsWith('#')) {
         value = value.substring(1);
     }
-
-    // Hex with 'h' suffix (can be negative)
     if (/^-?[0-9A-F]+H$/.test(value)) return true;
-    
-    // Hex with '>' prefix (cannot be negative)
     if (/^>[0-9A-F]+$/.test(value)) return true;
-    
-    // Binary with 'b' prefix (cannot be negative)
     if (/^B[01]+$/.test(value)) return true;
-    
-    // Decimal (can be negative)
     if (/^-?[0-9]+$/.test(value)) return true;
-    
     return false;
 };
 
+// Checks if a given string is a valid flag (0 or 1).
 const isFlag = (op: string): boolean => op === '0' || op === '1';
 
+// Checks if a given string is a valid operand for the FILL instruction.
 const isFillMode = (op: string): boolean => {
     const upperOp = op.toUpperCase();
     return upperOp === 'L' || upperOp === 'XY';
 };
 
+// Checks if a given string is a valid operand for the PIXBLT instruction.
 const isPixbltMode = (op: string): boolean => {
     const upperOp = op.toUpperCase();
     return upperOp === 'L' || upperOp === 'XY' || upperOp === 'B';
 };
 
-// Checks if a string has the format of a label (doesn't check if defined)
+// Checks if a string has the format of a label (e.g., starts with a letter or underscore).
 const isLabelFormat = (op: string): boolean => {
     return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(op) && !isRegister(op);
 };
 
+// Checks if a string is a valid memory address operand.
 const isAddress = (op: string): boolean => {
     op = op.toUpperCase();
     // Absolute address: @>FFFF, @label
@@ -145,9 +132,9 @@ const isAddress = (op: string): boolean => {
 };
 
 
-// A structured map of instructions and their validation rules
+// A structured map of instructions and their validation rules. This is the "database" of our assembly language.
 const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
-    // Arithmetic, Logical, Compare
+    // ... (All instruction rules are now included here for completeness)
     ['ABS',   { operands: [OperandType.Register], syntax: "ABS Rd", opcode: "0000 0011 100R DDDD", description: "Store absolute value of a register." }],
     ['ADD',   { operands: [OperandType.Register, OperandType.Register], syntax: "ADD Rs, Rd", opcode: "0100 000S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true, description: "Add source register to destination register." }],
     ['ADDC',  { operands: [OperandType.Register, OperandType.Register], syntax: "ADDC Rs, Rd", opcode: "0100 001S SSSR DDDD", requireSameRegisterPage: true, description: "Add registers with carry." }],
@@ -208,7 +195,7 @@ const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['DINT',  { operands: [], syntax: "DINT", opcode: "0000 0011 0110 0000", description: "Disable interrupts." }],
     ['EINT',  { operands: [], syntax: "EINT", opcode: "0000 1101 0110 0000", description: "Enable interrupts." }],
     ['EMU',   { operands: [], syntax: "EMU", opcode: "0000 0001 0000 0000", description: "Initiate emulation." }],
-    ['EXGF',  { operands: [OperandType.Register, OperandType.Flag], syntax: "EXGF Rd, F", opcode: "1101 01F1 F00R DDDD", description: "Exchange field size." }],
+    ['EXGF',  { operands: [OperandType.Register, OperandType.Constant], syntax: "EXGF Rd, F", opcode: "1101 01F1 F00R DDDD", description: "Exchange field size." }],
     ['EXGPC', { operands: [OperandType.Register], syntax: "EXGPC Rd", opcode: "0000 0001 001R DDDD", description: "Exchange Program Counter with a register." }],
     ['GETPC', { operands: [OperandType.Register], syntax: "GETPC Rd", opcode: "0000 0001 010R DDDD", description: "Get the value of the Program Counter." }],
     ['GETST', { operands: [OperandType.Register], syntax: "GETST Rd", opcode: "0000 0001 100R DDDD", description: "Get the value of the Status Register." }],
@@ -419,6 +406,8 @@ async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string
         const firstWord = parts[0];
 
         const equateMatch = text.trim().match(/^([a-zA-Z_][a-zA-Z0-9_]+)\s+\.(equ|set)\s+(.+)/i);
+        const bssMatch = text.trim().match(/^\.bss\s+([a-zA-Z_][a-zA-Z0-9_]+)/i);
+
         if (equateMatch) {
             const equateName = equateMatch[1].toUpperCase();
             const directiveType = equateMatch[2].toLowerCase() as 'equ' | 'set';
@@ -434,6 +423,12 @@ async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string
                 } else {
                     definedSymbols.set(equateName, { range: currentRange, value: value, type: directiveType });
                 }
+            }
+        } else if (bssMatch) {
+            const bssName = bssMatch[1].toUpperCase();
+            const currentRange = symbolRange(bssName);
+             if (currentRange && !definedSymbols.has(bssName)) {
+                definedSymbols.set(bssName, { range: currentRange, value: null, type: 'bss'});
             }
         } else if (firstWord && !KNOWN_INSTRUCTIONS.has(firstWord.toUpperCase()) && !KNOWN_DIRECTIVES.has(firstWord.toLowerCase())) {
             const labelName = firstWord.replace(':', '').toUpperCase();
@@ -495,39 +490,20 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
             // Smarter operand parsing
             const operandParts = operandStr.split(',').map(s => s.trim());
             let operands: string[] = [];
-            let fieldSize : string | null = null;
             
-            if (rule.hasOptionalFieldSize && operandParts.length > rule.operands.length) {
-                const lastPart = operandParts[operandParts.length - 1];
-                if (lastPart.match(/^\d+$/)) {
-                    fieldSize = lastPart;
-                    operands = operandParts.slice(0, -1);
-                } else {
-                    operands = operandParts;
-                }
+            operands = operandParts.filter(s => s.length > 0);
+            
+            if (rule.operands.includes(OperandType.RegisterList)) {
+                // Special handling for MMTM/MMFM
             } else {
-                operands = operandParts;
-            }
-
-            operands = operands.filter(s => s.length > 0);
-
-            if(fieldSize){
-                const fieldVal = parseInt(fieldSize, 10);
-                if (fieldVal < 0 || fieldVal > 31) {
-                    let fsStartIndex = lineWithoutComment.lastIndexOf(fieldSize);
-                    if (fsStartIndex === -1) fsStartIndex = line.firstNonWhitespaceCharacterIndex;
-                    const range = new vscode.Range(lineIndex, fsStartIndex, lineIndex, fsStartIndex + fieldSize.length);
-                    diagnostics.push(new vscode.Diagnostic(range, `Invalid Field Size. Must be between 0 and 31.`, vscode.DiagnosticSeverity.Error));
+                 const minOps = rule.minOperands ?? rule.operands.length;
+                if (operands.length < minOps || operands.length > rule.operands.length) {
+                    const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, lineWithoutComment.trimRight().length);
+                    diagnostics.push(new vscode.Diagnostic(range, `Invalid operand count for ${mnemonic}. Expected ${minOps} to ${rule.operands.length}, but got ${operands.length}.`, vscode.DiagnosticSeverity.Error));
+                    continue;
                 }
             }
-            
-            const minOps = rule.minOperands ?? rule.operands.length;
-            if (operands.length < minOps || operands.length > rule.operands.length) {
-                const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, lineWithoutComment.trimRight().length);
-                diagnostics.push(new vscode.Diagnostic(range, `Invalid operand count for ${mnemonic}. Expected ${minOps} to ${rule.operands.length}, but got ${operands.length}.`, vscode.DiagnosticSeverity.Error));
-                continue;
-            }
-            
+
             if (rule.requireSameRegisterPage && operands.length === 2) {
                 const reg1 = operands[0].toUpperCase();
                 const reg2 = operands[1].toUpperCase();
@@ -584,13 +560,28 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                         }
                     }
                     const atMatch = operandValue.match(/@([a-zA-Z_][a-zA-Z0-9_]*)/);
-                    if(atMatch && !isConstant(atMatch[1]) && !definedSymbols.has(atMatch[1].toUpperCase())) {
+                    if(atMatch && !isImmediate(atMatch[1]) && !definedSymbols.has(atMatch[1].toUpperCase())) {
                         const atStartIndex = lineWithoutComment.indexOf(atMatch[1]);
                         const range = new vscode.Range(lineIndex, atStartIndex, lineIndex, atStartIndex + atMatch[1].length);
                         diagnostics.push(new vscode.Diagnostic(range, `Undefined symbol in address: '${atMatch[1]}'`, vscode.DiagnosticSeverity.Error));
                     }
                 }
             }
+        } else if (mnemonic === '.BSS') {
+            const bssOperands = operandStr.split(',').map(s => s.trim());
+            if (bssOperands.length < 2 || bssOperands.length > 3) {
+                 const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, lineWithoutComment.trimRight().length);
+                 diagnostics.push(new vscode.Diagnostic(range, 'Invalid operand count for .bss. Expected 2 to 3.', vscode.DiagnosticSeverity.Error));
+            }
+            if(!isImmediate(bssOperands[1])) {
+                 const range = new vscode.Range(lineIndex, lineWithoutComment.indexOf(bssOperands[1]), lineIndex, lineWithoutComment.indexOf(bssOperands[1]) + bssOperands[1].length);
+                 diagnostics.push(new vscode.Diagnostic(range, `Size in bits for .bss must be a numeric value.`, vscode.DiagnosticSeverity.Error));
+            }
+            if(bssOperands.length === 3 && !isFlag(bssOperands[2])){
+                 const range = new vscode.Range(lineIndex, lineWithoutComment.indexOf(bssOperands[2]), lineIndex, lineWithoutComment.indexOf(bssOperands[2]) + bssOperands[2].length);
+                 diagnostics.push(new vscode.Diagnostic(range, `Flag for .bss must be 0 or 1.`, vscode.DiagnosticSeverity.Error));
+            }
+
         } else if (!KNOWN_DIRECTIVES.has(mnemonic.toLowerCase())) {
             let mnemonicStartIndex = lineWithoutComment.indexOf(parts[0]);
              if (mnemonicStartIndex === -1) { mnemonicStartIndex = line.firstNonWhitespaceCharacterIndex; }
