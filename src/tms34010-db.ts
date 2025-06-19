@@ -120,7 +120,7 @@ export const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
 ]);
 
 export const KNOWN_DIRECTIVES = new Set([
-    'equ', 'word', 'long',
+    'equ', 'word', 'long', 'byte',
     '.set', '.equ', '.word', '.long', '.string', '.asciiz', '.byte', '.field', '.sint', '.float',
     '.sect', '.bss', '.text', '.data', '.align', '.space',
     '.global', '.globl',

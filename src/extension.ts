@@ -131,7 +131,13 @@ function evaluateSymbolicExpression(expression: string, definedSymbols: Map<stri
         resolved = resolved.replace(/>([0-9A-F]+)/gi, "0x$1");
         resolved = resolved.replace(/([01]+)B/gi, "0b$1");
         
-        const remainingWords = resolved.match(/(?<!0x|0b)\b[a-zA-Z_][a-zA-Z0-9_.]*/g);
+        let tempForCheck = resolved;
+        tempForCheck = tempForCheck.replace(/0x[0-9a-f]+/gi, ' ');
+        tempForCheck = tempForCheck.replace(/0b[01]+/gi, ' ');
+        tempForCheck = tempForCheck.replace(/\b\d+\b/g, ' ');
+        tempForCheck = tempForCheck.replace(/[()*/+\-]/g, ' ');
+
+        const remainingWords = tempForCheck.match(/[a-zA-Z_][a-zA-Z0-9_.]*/g);
         if (remainingWords) {
             for (const word of remainingWords) {
                 const symbolInfo = definedSymbols.get(word);
@@ -563,7 +569,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                     diagnostics.push(new vscode.Diagnostic(accurateRange, message, vscode.DiagnosticSeverity.Error));
                 }
             }
-        } else if (upperMnemonic === 'WORD' || upperMnemonic === 'LONG') {
+        } else if (upperMnemonic === 'WORD' || upperMnemonic === 'LONG' || upperMnemonic === 'BYTE') {
             const values = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
             if (values.length === 0) {
                 const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
@@ -588,6 +594,15 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                     const range = new vscode.Range(lineIndex, index, lineIndex, index + value.length);
                     diagnostics.push(new vscode.Diagnostic(range, `Invalid value '${value}' for .${upperMnemonic}. Must resolve to a number or be a defined label.`, vscode.DiagnosticSeverity.Error));
                 }
+            }
+
+            if (upperMnemonic === 'BYTE' && values.length > 0 && values.length % 4 !== 0) {
+                const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
+                diagnostics.push(new vscode.Diagnostic(
+                    range, 
+                    `Number of bytes (${values.length}) is not divisible by 4. This may cause word-alignment issues.`,
+                    vscode.DiagnosticSeverity.Warning
+                ));
             }
         } else if (upperMnemonic === 'BSS') {
             const bssOperands = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);

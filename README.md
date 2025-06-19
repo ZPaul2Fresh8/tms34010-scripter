@@ -13,7 +13,7 @@ This is an extension for Visual Studio Code for syntax validation for the Texas 
 
 ## Known Issues
 
-Most if not all instructions implemented. Not thorooughly tested yet and it's very much a work in progress.
+Most if not all instructions implemented. Not thoroughly tested yet and it's very much a work in progress.
 
 ## Release Notes
 
