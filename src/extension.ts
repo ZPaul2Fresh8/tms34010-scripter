@@ -349,21 +349,12 @@ async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string
             return index >= 0 ? new vscode.Range(lineIndex, index, lineIndex, index + symbol.length) : null;
         };
         
-        const globalMatch = trimmedText.match(/^\.(global|globl)\s+(.+)/i);
+        // **FIX**: The global directive is now only for marking symbols, not defining them here.
         const equateMatch = trimmedText.match(/\b([a-zA-Z_][a-zA-Z0-9_]+)\s+(\.equ|equ|\.set|set)\s+(.+)/i);
         const bssMatch = trimmedText.match(/\.bss\s+([a-zA-Z_][a-zA-Z0-9_.]+)/i);
         const labelMatch = trimmedText.match(/^([a-zA-Z_][a-zA-Z0-9_.]+):/);
         
-        if (globalMatch) {
-            const symbolsStr = globalMatch[2];
-            const globalSymbols = symbolsStr.split(',').map(s => s.trim()).filter(Boolean);
-            for (const symbolName of globalSymbols) {
-                if (!definedSymbols.has(symbolName)) {
-                    const range = new vscode.Range(lineIndex, text.indexOf(symbolName), lineIndex, text.indexOf(symbolName) + symbolName.length);
-                    definedSymbols.set(symbolName, { uri: doc.uri, range, value: null, type: 'label' });
-                }
-            }
-        } else if (equateMatch) {
+        if (equateMatch) {
             const equateName = equateMatch[1];
             defineSymbol(equateName, equateMatch[2].toLowerCase().replace('.', '') as 'equ'|'set', equateMatch[3].trim(), symbolRange(equateName), definedSymbols, doc.uri, diagnostics);
         } else if (bssMatch) {
@@ -391,6 +382,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
     await parseSymbols(doc, definedSymbols, processedFiles, diagnostics);
     documentSymbolsCache.set(doc.uri.toString(), definedSymbols);
 
+    // --- Second pass to check for undefined global symbols ---
     for (let lineIndex = 0; lineIndex < doc.lineCount; lineIndex++) {
         const line = doc.lineAt(lineIndex);
         const text = line.text.trim();
@@ -415,6 +407,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
         }
     }
 
+    // --- Main validation pass ---
     for (let lineIndex = 0; lineIndex < doc.lineCount; lineIndex++) {
         const line = doc.lineAt(lineIndex);
         const lineWithoutComment = line.text.split(';')[0];
@@ -580,9 +573,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
             
             for (const value of values) {
                 let isValid = false;
-                if (isImmediate(value)) {
-                    isValid = true;
-                } else if (checkLabel(value)) {
+                if (checkLabel(value)) {
                     isValid = true;
                 } else {
                     const evalResult = evaluateSymbolicExpression(value, definedSymbols);
