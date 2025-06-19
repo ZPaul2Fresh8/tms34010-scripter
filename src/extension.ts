@@ -131,7 +131,7 @@ function evaluateSymbolicExpression(expression: string, definedSymbols: Map<stri
         resolved = resolved.replace(/>([0-9A-F]+)/gi, "0x$1");
         resolved = resolved.replace(/([01]+)B/gi, "0b$1");
         
-        const remainingWords = resolved.match(/(?<!0x|0b)\b[a-zA-Z_][a-zA-Z0-9_]*/g);
+        const remainingWords = resolved.match(/(?<!0x|0b)\b[a-zA-Z_][a-zA-Z0-9_.]*/g);
         if (remainingWords) {
             for (const word of remainingWords) {
                 const symbolInfo = definedSymbols.get(word);
@@ -385,7 +385,6 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
     await parseSymbols(doc, definedSymbols, processedFiles, diagnostics);
     documentSymbolsCache.set(doc.uri.toString(), definedSymbols);
 
-    // Second pass to check for undefined global symbols
     for (let lineIndex = 0; lineIndex < doc.lineCount; lineIndex++) {
         const line = doc.lineAt(lineIndex);
         const text = line.text.trim();
@@ -410,7 +409,6 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
         }
     }
 
-    // Main validation pass
     for (let lineIndex = 0; lineIndex < doc.lineCount; lineIndex++) {
         const line = doc.lineAt(lineIndex);
         const lineWithoutComment = line.text.split(';')[0];
@@ -434,7 +432,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
 
         const mnemonic = parts[mnemonicIndex];
         const operandStr = parts.slice(mnemonicIndex + 1).join(' ');
-        const upperMnemonic = mnemonic.toUpperCase();
+        const upperMnemonic = mnemonic.toUpperCase().replace('.', '');
         
         if (upperMnemonic === 'MMTM' || upperMnemonic === 'MMFM') {
             const firstCommaIndex = operandStr.indexOf(',');
@@ -565,7 +563,33 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                     diagnostics.push(new vscode.Diagnostic(accurateRange, message, vscode.DiagnosticSeverity.Error));
                 }
             }
-        } else if (upperMnemonic === '.BSS') {
+        } else if (upperMnemonic === 'WORD' || upperMnemonic === 'LONG') {
+            const values = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
+            if (values.length === 0) {
+                const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
+                diagnostics.push(new vscode.Diagnostic(range, `.${upperMnemonic} directive requires at least one value.`, vscode.DiagnosticSeverity.Error));
+            }
+
+            const checkLabel = (op: string) => isLabelFormat(op) && definedSymbols.has(op);
+            
+            for (const value of values) {
+                let isValid = false;
+                if (isImmediate(value)) {
+                    isValid = true;
+                } else if (checkLabel(value)) {
+                    isValid = true;
+                } else {
+                    const evalResult = evaluateSymbolicExpression(value, definedSymbols);
+                    isValid = evalResult.value !== null;
+                }
+
+                if (!isValid) {
+                    const index = lineWithoutComment.indexOf(value);
+                    const range = new vscode.Range(lineIndex, index, lineIndex, index + value.length);
+                    diagnostics.push(new vscode.Diagnostic(range, `Invalid value '${value}' for .${upperMnemonic}. Must resolve to a number or be a defined label.`, vscode.DiagnosticSeverity.Error));
+                }
+            }
+        } else if (upperMnemonic === 'BSS') {
             const bssOperands = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
             
             if (bssOperands.length < 2 || bssOperands.length > 3) {
@@ -608,7 +632,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                     diagnostics.push(new vscode.Diagnostic(getOperandRange(alignment), `Flag for .bss must be 0 or 1.`, vscode.DiagnosticSeverity.Error));
                 }
             }
-        } else if (upperMnemonic === '.WIDTH' || upperMnemonic === '.OPTION') {
+        } else if (upperMnemonic === 'WIDTH' || upperMnemonic === 'OPTION') {
             const mnemonicRange = new vscode.Range(lineIndex, lineWithoutComment.toLowerCase().indexOf(upperMnemonic.toLowerCase()), lineIndex, lineWithoutComment.toLowerCase().indexOf(upperMnemonic.toLowerCase()) + upperMnemonic.length);
             diagnostics.push(new vscode.Diagnostic(
                 mnemonicRange,

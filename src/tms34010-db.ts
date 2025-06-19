@@ -1,6 +1,5 @@
 // This file contains the "database" for the TMS34010 assembly language.
 
-// Defines the different categories of operands our language supports.
 export enum OperandType {
     Register,
     Immediate,
@@ -9,15 +8,14 @@ export enum OperandType {
     Label,
     RegisterOrConstant,
     RegisterOrLabel,
-    Addressable, // Represents a register or a memory address
-    Flag,        // Represents a 0 or 1 flag
-    FillMode,    // For FILL L or FILL XY
-    PixbltMode,  // For PIXBLT operands L, XY, or B
-    RegisterList, // For MMTM/MMFM
+    Addressable, 
+    Flag,        
+    FillMode,    
+    PixbltMode, 
+    RegisterList,
     None
 }
 
-// Defines the structure for an instruction's syntax rule.
 export interface InstructionRule {
     operands: OperandType[];
     syntax: string;
@@ -36,7 +34,6 @@ export const B_REGISTERS = new Set(B_REGISTERS_ORDERED);
 const OTHER_REGISTERS = new Set(['ST', 'PC', 'IOSTAT', 'CTRL1', 'CTRL2', 'HSTADR', 'HSTDATA', 'HSTCTL', 'INTPEND', 'INTENB', 'DPYCTL', 'DPYSTRT', 'DPYADR', 'VCOUNT', 'HCOUNT', 'PFILL', 'PLINE', 'CONVSP', 'CONVDP', 'PSIZE', 'PMOVE', 'SADDR', 'SCOUNT', 'DADDR', 'DCOUNT', 'OFFSET', 'WINDOW', 'WSTART', 'WEND', 'DYDX', 'COLOR0', 'COLOR1']);
 export const TMS34010_REGISTERS = new Set([...A_REGISTERS, ...B_REGISTERS, ...OTHER_REGISTERS]);
 
-// A structured map of ALL instructions and their validation rules.
 export const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['ABS',   { operands: [OperandType.Register], syntax: "ABS Rd", opcode: "0000 0011 100R DDDD", description: "Store absolute value of a register." }],
     ['ADD',   { operands: [OperandType.Register, OperandType.Register], syntax: "ADD Rs, Rd", opcode: "0100 000S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true, description: "Add source register to destination register." }],
@@ -109,7 +106,7 @@ export const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['RETI',  { operands: [], syntax: "RETI", opcode: "0000 1001 0100 0000", description: "Return from interrupt." }],
     ['RETS',  { operands: [OperandType.Constant], syntax: "RETS [N]", opcode: "0000 1001 011N NNNN", minOperands: 0, description: "Return from subroutine." }],
     ['REV',   { operands: [OperandType.Register], syntax: "REV Rd", opcode: "0000 0000 001R DDDD", description: "Get the TMS34010 revision level." }],
-    ['SETF',  { operands: [OperandType.Constant, OperandType.Flag], syntax: "SETF FS, FE, F", hasOptionalFieldSize:true, opcode: "0000 0111 01(FS)(FE)(F)0 0000", description: "Set the field parameters." }],
+    ['SETF',  { operands: [OperandType.Constant, OperandType.Flag, OperandType.Flag], syntax: "SETF FS, FE, F", opcode: "0000 01F1 01E SSSS", description: "Set the field parameters." }],
     ['TRAP',  { operands: [OperandType.Constant], syntax: "TRAP N", opcode: "0000 1001 000N NNNN", description: "Software interrupt." }],
     ['DSJ',   { operands: [OperandType.Register, OperandType.Label], syntax: "DSJ Rd, Address", opcode: "0000 1101 1000 DDDD", description: "Decrement and skip if not zero." }],
     ['DSJEQ', { operands: [OperandType.Register, OperandType.Label], syntax: "DSJEQ Rd, Address", opcode: "0000 1101 1010 DDDD", description: "Decrement and skip if equal." }],
@@ -122,9 +119,8 @@ export const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ...['RL', 'SLA', 'SLL', 'SRA', 'SRL'].map(s => [s, {operands: [OperandType.RegisterOrConstant, OperandType.Register], syntax: `${s} K/Rs, Rd`, opcode: `K: 001x xxKK KKK0 DDDD\nRs: 0110 xx0S SSSR DDDD`, hasOptionalFieldSize: true, requireSameRegisterPage: true, description: `Shift or rotate a register.` }] as [string, InstructionRule])
 ]);
 
-// Set of all known assembler directives
 export const KNOWN_DIRECTIVES = new Set([
-    'equ',
+    'equ', 'word', 'long',
     '.set', '.equ', '.word', '.long', '.string', '.asciiz', '.byte', '.field', '.sint', '.float',
     '.sect', '.bss', '.text', '.data', '.align', '.space',
     '.global', '.globl',
