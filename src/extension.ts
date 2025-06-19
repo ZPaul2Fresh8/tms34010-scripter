@@ -639,18 +639,36 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                     diagnostics.push(new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Error));
                 }
             }
-        // --- MODIFICATION: Updated validation logic for .set and .equ ---
+        // --- MODIFICATION: New, more robust validation for .set and .equ ---
         } else if (upperMnemonic === 'SET' || upperMnemonic === 'EQU') {
             const equateMatch = text.match(/\b([a-zA-Z_][a-zA-Z0-9_]+)\s+(?:\.equ|equ|\.set|set)\s+(.+)/i);
             if (equateMatch) {
                 const value = equateMatch[2].trim();
                 let isValid = false;
 
-                // Check if the value is a valid register name
-                if (isRegister(value)) {
+                // First, resolve aliases fully
+                const resolvedValue = resolveSymbols(value, definedSymbols);
+
+                // Check if the resolved value is a register or a simple immediate number
+                if (isRegister(resolvedValue) || isImmediate(resolvedValue)) {
                     isValid = true;
-                } else {
-                    // Otherwise, check if it's a valid numeric expression
+                } 
+                // Then, check for the special [word, word] syntax on the original value
+                else if (value.startsWith('[') && value.endsWith(']')) {
+                    const bracketContent = value.substring(1, value.length - 1);
+                    const parts = bracketContent.split(',');
+                    if (parts.length === 2) {
+                        const part1 = evaluateSymbolicExpression(parts[0].trim(), definedSymbols);
+                        const part2 = evaluateSymbolicExpression(parts[1].trim(), definedSymbols);
+
+                        if (part1.value !== null && (part1.value >= 0 && part1.value <= 65535) &&
+                            part2.value !== null && (part2.value >= 0 && part2.value <= 65535)) {
+                            isValid = true;
+                        }
+                    }
+                }
+                else {
+                    // Finally, treat it as a complex expression
                     const evalResult = evaluateSymbolicExpression(value, definedSymbols);
                     if (evalResult.value !== null) {
                         isValid = true;
@@ -660,7 +678,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                 if (!isValid) {
                     const index = lineWithoutComment.indexOf(value);
                     const range = new vscode.Range(lineIndex, index, lineIndex, index + value.length);
-                    const errorMessage = `Expression for .${upperMnemonic} must resolve to a numeric value or be a valid register.`;
+                    const errorMessage = `Invalid value for .${upperMnemonic}. Must be a register, a numeric expression, or two 16-bit words in brackets [w1,w2].`;
                     diagnostics.push(new vscode.Diagnostic(range, errorMessage, vscode.DiagnosticSeverity.Error));
                 }
             }
