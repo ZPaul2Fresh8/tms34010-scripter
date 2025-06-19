@@ -277,6 +277,37 @@ export function activate(context: vscode.ExtensionContext) {
                      return new vscode.Hover(content, range);
                 }
 
+                                // --- MODIFICATION START ---
+                // Check if the word is a symbol in the cache
+                const symbols = documentSymbolsCache.get(document.uri.toString());
+                if (symbols && symbols.has(word)) {
+                    const symbolInfo = symbols.get(word)!;
+                    let content: vscode.MarkdownString | undefined;
+
+                    // Handle .equ and .set symbols
+                    if ((symbolInfo.type === 'equ' || symbolInfo.type === 'set') && symbolInfo.value) {
+                        const title = symbolInfo.type === 'equ' ? 'Equate' : 'Set Alias';
+                        const evalResult = evaluateSymbolicExpression(symbolInfo.value, symbols);
+                        
+                        let details = `**Value:** \`${symbolInfo.value}\``;
+                        if (evalResult.value !== null) {
+                            details += `\n\n**Evaluates to:** \`${evalResult.value}\``;
+                        }
+
+                        content = new vscode.MarkdownString(`**${title}:** \`${word}\`\n\n${details}`);
+                    }
+                    // Handle labels and bss symbols
+                    else if (symbolInfo.type === 'label' || symbolInfo.type === 'bss' || symbolInfo.type === 'global') {
+                        content = new vscode.MarkdownString(`**Symbol:** \`${word}\`\n\n**Type:** \`.${symbolInfo.type}\``);
+                        content.appendMarkdown(`\n\n*Defined at:* \`${symbolInfo.uri.fsPath.split(path.sep).pop()}\` (Line ${symbolInfo.range.start.line + 1})`);
+                    }
+
+                    if (content) {
+                        return new vscode.Hover(content, range);
+                    }
+                }
+                // --- MODIFICATION END ---
+
                 return null;
             }
         })
