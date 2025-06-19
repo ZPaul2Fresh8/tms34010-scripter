@@ -344,7 +344,7 @@ async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string
         };
         
         const globalMatch = trimmedText.match(/^\.(global|globl)\s+(.+)/i);
-        const equateMatch = trimmedText.match(/\b([a-zA-Z_][a-zA-Z0-9_]+)\s+\.(equ|set)\s+(.+)/i);
+        const equateMatch = trimmedText.match(/\b([a-zA-Z_][a-zA-Z0-9_]+)\s+(\.equ|equ|\.set|set)\s+(.+)/i);
         const bssMatch = trimmedText.match(/\.bss\s+([a-zA-Z_][a-zA-Z0-9_.]+)/i);
         const labelMatch = trimmedText.match(/^([a-zA-Z_][a-zA-Z0-9_.]+):/);
         
@@ -359,7 +359,7 @@ async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string
             }
         } else if (equateMatch) {
             const equateName = equateMatch[1];
-            defineSymbol(equateName, equateMatch[2].toLowerCase() as 'equ'|'set', equateMatch[3].trim(), symbolRange(equateName), definedSymbols, doc.uri, diagnostics);
+            defineSymbol(equateName, equateMatch[2].toLowerCase().replace('.', '') as 'equ'|'set', equateMatch[3].trim(), symbolRange(equateName), definedSymbols, doc.uri, diagnostics);
         } else if (bssMatch) {
             const bssName = bssMatch[1];
             defineSymbol(bssName, 'bss', null, symbolRange(bssName), definedSymbols, doc.uri, diagnostics);
@@ -646,7 +646,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
 }
 
 function validateRegisterList(listStr: string, lineIndex: number, lineText: string, diagnostics: vscode.Diagnostic[]) {
-    const listRange = new vscode.Range(lineIndex, lineText.indexOf(listStr), lineIndex, lineText.indexOf(listStr) + listStr.length);
+    const listRange = new vscode.Range(lineIndex, lineText.indexOf(listStr), lineIndex, listStr.length);
     let finalRegs: string[] = [];
 
     const parts = listStr.split(',').map(p => p.trim());

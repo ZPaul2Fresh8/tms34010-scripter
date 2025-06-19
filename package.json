@@ -1,7 +1,7 @@
 {
     "name": "tms34010-scripter",
-    "displayName": "tms34010-scripter",
-    "description": "A syntax checker for TMS34010 assembly.",
+    "displayName": "TMS34010 Assembly Scripter",
+    "description": "Language support for TMS34010 Assembly",
     "version": "0.0.1",
     "engines": {
         "vscode": "^1.89.0"
@@ -22,7 +22,9 @@
                     "tms-asm"
                 ],
                 "extensions": [
-                    ".asm"
+                    ".asm",
+                    ".TBL",
+                    ".GLO"
                 ],
                 "configuration": "./language-configuration.json"
             }
