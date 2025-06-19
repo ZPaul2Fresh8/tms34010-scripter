@@ -56,7 +56,7 @@ const isConstant = (op: string): boolean => {
 const isFlag = (op: string): boolean => op === '0' || op === '1';
 const isFillMode = (op: string): boolean => op.toUpperCase() === 'L' || op.toUpperCase() === 'XY';
 const isPixbltMode = (op: string): boolean => ['L', 'XY', 'B'].includes(op.toUpperCase());
-const isLabelFormat = (op: string): boolean => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(op) && !isRegister(op);
+const isLabelFormat = (op: string): boolean => /^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(op) && !isRegister(op);
 const isAddress = (op: string): boolean => {
     op = op.toUpperCase();
     if (op.startsWith('@')) {
@@ -105,7 +105,26 @@ function resolveSymbols(operand: string, definedSymbols: Map<string, SymbolInfo>
 
 
 function evaluateSymbolicExpression(expression: string, definedSymbols: Map<string, SymbolInfo>): EvaluationResult {
-    let resolved = resolveSymbols(expression, definedSymbols);
+    let resolved = expression;
+    
+    for (let i = 0; i < 10; i++) { 
+        let changed = false;
+        const symbolNames = Array.from(definedSymbols.keys());
+        if (symbolNames.length === 0) break;
+        
+        const regex = new RegExp(`\\b(${symbolNames.join('|')})\\b`, 'g');
+        const newResolved = resolved.replace(regex, (match) => {
+            const symbolInfo = definedSymbols.get(match);
+            if (symbolInfo && symbolInfo.value) {
+                changed = true;
+                return `(${symbolInfo.value})`; 
+            }
+            return match; 
+        });
+        
+        if (!changed) break;
+        resolved = newResolved;
+    }
     
     try {
         resolved = resolved.replace(/([0-9A-F]+)H/gi, "0x$1");
@@ -286,9 +305,10 @@ async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string
     const includePromises: Promise<void>[] = [];
     for (let lineIndex = 0; lineIndex < doc.lineCount; lineIndex++) {
         const line = doc.lineAt(lineIndex);
-        const includeMatch = line.text.trim().match(/^\.include\s+"([^"]+)"/i);
+        const includeMatch = line.text.trim().match(/^\.include\s+(?:"([^"]+)"|([^\s"]+))/i);
+        
         if (includeMatch) {
-            const fileName = includeMatch[1];
+            const fileName = includeMatch[1] || includeMatch[2];
             const currentDir = path.dirname(doc.uri.fsPath);
             const includeUri = vscode.Uri.file(path.join(currentDir, fileName));
             
@@ -323,11 +343,21 @@ async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string
             return index >= 0 ? new vscode.Range(lineIndex, index, lineIndex, index + symbol.length) : null;
         };
         
+        const globalMatch = trimmedText.match(/^\.(global|globl)\s+(.+)/i);
         const equateMatch = trimmedText.match(/\b([a-zA-Z_][a-zA-Z0-9_]+)\s+\.(equ|set)\s+(.+)/i);
-        const bssMatch = trimmedText.match(/\.bss\s+([a-zA-Z_][a-zA-Z0-9_]+)/i);
-        const labelMatch = trimmedText.match(/^([a-zA-Z_][a-zA-Z0-9_]+):/);
+        const bssMatch = trimmedText.match(/\.bss\s+([a-zA-Z_][a-zA-Z0-9_.]+)/i);
+        const labelMatch = trimmedText.match(/^([a-zA-Z_][a-zA-Z0-9_.]+):/);
         
-        if (equateMatch) {
+        if (globalMatch) {
+            const symbolsStr = globalMatch[2];
+            const globalSymbols = symbolsStr.split(',').map(s => s.trim()).filter(Boolean);
+            for (const symbolName of globalSymbols) {
+                if (!definedSymbols.has(symbolName)) {
+                    const range = new vscode.Range(lineIndex, text.indexOf(symbolName), lineIndex, text.indexOf(symbolName) + symbolName.length);
+                    definedSymbols.set(symbolName, { uri: doc.uri, range, value: null, type: 'label' });
+                }
+            }
+        } else if (equateMatch) {
             const equateName = equateMatch[1];
             defineSymbol(equateName, equateMatch[2].toLowerCase() as 'equ'|'set', equateMatch[3].trim(), symbolRange(equateName), definedSymbols, doc.uri, diagnostics);
         } else if (bssMatch) {
@@ -355,12 +385,37 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
     await parseSymbols(doc, definedSymbols, processedFiles, diagnostics);
     documentSymbolsCache.set(doc.uri.toString(), definedSymbols);
 
+    // Second pass to check for undefined global symbols
+    for (let lineIndex = 0; lineIndex < doc.lineCount; lineIndex++) {
+        const line = doc.lineAt(lineIndex);
+        const text = line.text.trim();
+        const upperText = text.toUpperCase();
+
+        if (upperText.startsWith('.GLOBAL') || upperText.startsWith('.GLOBL')) {
+            const parts = text.split(/\s+/);
+            const operandStr = parts.slice(1).join(' ');
+            const globalSymbols = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
+
+            for (const symbol of globalSymbols) {
+                if (!definedSymbols.has(symbol)) {
+                    const index = line.text.indexOf(symbol);
+                    const range = new vscode.Range(lineIndex, index, lineIndex, index + symbol.length);
+                    diagnostics.push(new vscode.Diagnostic(
+                        range,
+                        `Symbol '${symbol}' is declared global but is not defined in the project.`,
+                        vscode.DiagnosticSeverity.Warning
+                    ));
+                }
+            }
+        }
+    }
+
+    // Main validation pass
     for (let lineIndex = 0; lineIndex < doc.lineCount; lineIndex++) {
         const line = doc.lineAt(lineIndex);
         const lineWithoutComment = line.text.split(';')[0];
         const text = lineWithoutComment.trim();
         
-        // **NEW**: Ignore lines that start with an asterisk for comments
         if (text.length === 0 || text.startsWith('*')) {
             continue;
         }
@@ -385,7 +440,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
             const firstCommaIndex = operandStr.indexOf(',');
             if (firstCommaIndex === -1) {
                 const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
-                diagnostics.push(new vscode.Diagnostic(range, `${upperMnemonic} requires 2 operands: a source/destination register and a register list.`, vscode.DiagnosticSeverity.Error));
+                diagnostics.push(new vscode.Diagnostic(range, `${upperMnemonic} requires 2 operands.`, vscode.DiagnosticSeverity.Error));
                 continue;
             }
 
@@ -395,7 +450,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
             if (!isRegister(regOperand)) {
                 const index = lineWithoutComment.indexOf(regOperand);
                 const range = new vscode.Range(lineIndex, index, lineIndex, index + regOperand.length);
-                diagnostics.push(new vscode.Diagnostic(range, `Invalid register operand for ${upperMnemonic}.`, vscode.DiagnosticSeverity.Error));
+                diagnostics.push(new vscode.Diagnostic(range, `Invalid register for ${upperMnemonic}.`, vscode.DiagnosticSeverity.Error));
             }
 
             validateRegisterList(listOperand, lineIndex, lineWithoutComment, diagnostics);
@@ -409,12 +464,8 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
             }
 
             const isValidPixtOperand = (op: string): boolean => {
-                if (isRegister(op) || isAddress(op)) {
-                    return true;
-                }
-                if (op.toUpperCase().match(/^\*(A[0-9]{1,2}|B[0-9]{1,2}|SP|FP)\.XY$/)) {
-                    return true;
-                }
+                if (isRegister(op) || isAddress(op)) return true;
+                if (op.toUpperCase().match(/^\*(A[0-9]{1,2}|B[0-9]{1,2}|SP|FP)\.XY$/)) return true;
                 return false;
             };
 
@@ -464,14 +515,13 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                 
                 if (rule.hasOptionalFieldSize && i === rule.operands.length) {
                     if (!isFlag(operandValue)) {
-                        diagnostics.push(new vscode.Diagnostic(accurateRange, `Invalid field size operand for ${upperMnemonic}. Expected 0 or 1.`, vscode.DiagnosticSeverity.Error));
+                        diagnostics.push(new vscode.Diagnostic(accurateRange, `Invalid field size. Expected 0 or 1.`, vscode.DiagnosticSeverity.Error));
                     }
                     continue; 
                 }
 
                 const expectedType = rule.operands[i];
                 let isValid = false;
-                
                 const checkLabel = (op: string) => isLabelFormat(op) && definedSymbols.has(op);
                 
                 switch (expectedType) {
@@ -554,17 +604,17 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
             }
             
             if (alignment) {
-                const alignmentResult = evaluateSymbolicExpression(alignment, definedSymbols);
-                 if (alignmentResult.value === null) {
-                    if (alignmentResult.errorSymbol) {
-                        const symInfo = definedSymbols.get(alignmentResult.errorSymbol);
-                        const symType = symInfo ? `a memory location defined by .${symInfo.type}` : 'an undefined symbol';
-                        diagnostics.push(new vscode.Diagnostic(getOperandRange(alignment), `Symbol '${alignmentResult.errorSymbol}' is ${symType} and cannot be used in a mathematical expression.`, vscode.DiagnosticSeverity.Error));
-                    } else {
-                        diagnostics.push(new vscode.Diagnostic(getOperandRange(alignment), `Alignment operand for .bss must be a valid numeric value or expression.`, vscode.DiagnosticSeverity.Error));
-                    }
+                if (!isFlag(alignment)) {
+                    diagnostics.push(new vscode.Diagnostic(getOperandRange(alignment), `Flag for .bss must be 0 or 1.`, vscode.DiagnosticSeverity.Error));
                 }
             }
+        } else if (upperMnemonic === '.WIDTH' || upperMnemonic === '.OPTION') {
+            const mnemonicRange = new vscode.Range(lineIndex, lineWithoutComment.toLowerCase().indexOf(upperMnemonic.toLowerCase()), lineIndex, lineWithoutComment.toLowerCase().indexOf(upperMnemonic.toLowerCase()) + upperMnemonic.length);
+            diagnostics.push(new vscode.Diagnostic(
+                mnemonicRange,
+                `Directive '${upperMnemonic}' is recognized but validation is not yet implemented.`,
+                vscode.DiagnosticSeverity.Information
+            ));
         }
     }
     

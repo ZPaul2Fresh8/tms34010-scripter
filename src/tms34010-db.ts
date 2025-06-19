@@ -124,6 +124,7 @@ export const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
 
 // Set of all known assembler directives
 export const KNOWN_DIRECTIVES = new Set([
+    'equ',
     '.set', '.equ', '.word', '.long', '.string', '.asciiz', '.byte', '.field', '.sint', '.float',
     '.sect', '.bss', '.text', '.data', '.align', '.space',
     '.global', '.globl',
@@ -131,6 +132,6 @@ export const KNOWN_DIRECTIVES = new Set([
     '.def', '.ref', '.newblock', '.cdef', 'endcdef', '.clink', '.cstruct', '.endstruct',
     '.struct', '.union', '.tag', '.eval', '.emsg', '.wmsg', '.fclist', '.fcnolist',
     '.drlist', '.drnolist', '.mlist', '.mnolist', '.sslist', '.ssnolist', '.var',
-    '.label', 'option',
+    '.label', '.version', '.length', '.width', '.option',
     '.if', '.else', '.endif', '.include', '.file', '.title'
 ]);
