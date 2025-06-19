@@ -13,6 +13,7 @@ export enum OperandType {
     FillMode,    
     PixbltMode, 
     RegisterList,
+    ImmediateOrLabel,
     None
 }
 
@@ -78,7 +79,7 @@ export const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['MMFM',  { operands: [OperandType.Register, OperandType.RegisterList], syntax: "MMFM Rp, register_list", opcode: "0000 1001 101R DDDD", description: "Move multiple registers from memory." }],
     ['MMTM',  { operands: [OperandType.Register, OperandType.RegisterList], syntax: "MMTM Rp, register_list", opcode: "0000 1001 100R DDDD", description: "Move multiple registers to memory." }],
     ['MOVB',  { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "MOVB src, dest", opcode: "(various)", description: "Move a byte between registers and/or memory." }],
-    ['MOVI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "MOVI IW/IL, Rd", hasOptionalFieldSize:true, opcode: "IW: 0000 1001 110R DDDD\nIL: 0000 1001 111R DDDD", description: "Move an immediate value into a register." }],
+    ['MOVI',  { operands: [OperandType.ImmediateOrLabel, OperandType.Register], syntax: "MOVI IW/IL, Rd", hasOptionalFieldSize:true, opcode: "IW: 0000 1001 110R DDDD\nIL: 0000 1001 111R DDDD", description: "Move an immediate value into a register." }],
     ['MOVK',  { operands: [OperandType.Constant, OperandType.Register], syntax: "MOVK K, Rd", opcode: "0001 10KK KKKR DDDD", description: "Move a constant (1-32) into a register." }],
     ['MOVX',  { operands: [OperandType.Register, OperandType.Register], syntax: "MOVX Rs, Rd", opcode: "1110 11MS SSSR DDDD", requireSameRegisterPage: true, description: "Move the X-half of a register." }],
     ['MOVY',  { operands: [OperandType.Register, OperandType.Register], syntax: "MOVY Rs, Rd", opcode: "1110 11MS SSSR DDDD", requireSameRegisterPage: true, description: "Move the Y-half of a register." }],
@@ -86,7 +87,7 @@ export const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['CVXYL',  { operands: [OperandType.Register, OperandType.Register], syntax: "CVXYL Rs, Rd", opcode: "1110 100S SSSR DDDD", requireSameRegisterPage: true, description: "Convert XY address to linear address." }],
     ['DRAV',   { operands: [OperandType.Register, OperandType.Register], syntax: "DRAV Rs, Rd", opcode: "1111 011S SSSR DDDD", requireSameRegisterPage: true, description: "Draw and advance." }],
     ['FILL',   { operands: [OperandType.FillMode], syntax: "FILL L | FILL XY", opcode: "L: 0000 1111 1100 0000\nXY: 0000 1111 1110 0000", description: "Fill a pixel array." }],
-    ['LINE',   { operands: [OperandType.Flag], syntax: "LINE [0|1]", opcode: "0: 0DF1Ah\n1: 0DF9Ah", minOperands: 0, description: "Initiate a line draw operation." }],
+    ['LINE',   { operands: [OperandType.Flag], syntax: "LINE [0|1]", opcode: "0: 0xDF1A\n1: 0xDF9A", minOperands: 0, description: "Initiate a line draw operation." }],
     ['PIXBLT', { operands: [OperandType.PixbltMode, OperandType.PixbltMode], syntax: "PIXBLT mode, mode", opcode: "(various)", description: "Pixel Block Transfer." }],
     ['PIXT',   { operands: [OperandType.Addressable, OperandType.Addressable], syntax: "PIXT src, dest", opcode: "(various)", description: "Pixel Transfer." }],
     ['CALL',  { operands: [OperandType.RegisterOrLabel], syntax: "CALL Rs | CALL Label", opcode: "0000 1001 001R DDDD", description: "Call a subroutine." }],
@@ -113,7 +114,8 @@ export const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['DSJNE', { operands: [OperandType.Register, OperandType.Label], syntax: "DSJNE Rd, Address", opcode: "0000 1101 1100 DDDD", description: "Decrement and skip if not equal." }],
     ['DSJS',  { operands: [OperandType.Register, OperandType.Label], syntax: "DSJS Rd, Address", opcode: "0011 1Dxx xxx0 DDDD", description: "Decrement and skip short." }],
     ['JUMP',  { operands: [OperandType.Register], syntax: "JUMP Rs", opcode: "0000 0001 011R SSSS", description: "Jump to the address in a register." }],
-    ...['JRP', 'JRLS', 'JRLT', 'JRLE', 'JREQ', 'JRNE', 'JRGT', 'JRGE', 'JRHI', 'JRCC', 'JRCS', 'JRVC', 'JRVS', 'JRPL', 'JRMI', 'JRUC'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc oooooooo", description: `Jump relative if condition '${j.substring(2)}' is met.`}] as [string, InstructionRule]),
+    // --- MODIFICATION --- Added JRNC and JRC to the list
+    ...['JRP', 'JRLS', 'JRLT', 'JRLE', 'JREQ', 'JRNE', 'JRGT', 'JRGE', 'JRHI', 'JRCC', 'JRNC', 'JRCS', 'JRC', 'JRVC', 'JRVS', 'JRPL', 'JRMI', 'JRUC'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc oooooooo", description: `Jump relative if condition '${j.substring(2)}' is met.`}] as [string, InstructionRule]),
     ['JR', {operands: [OperandType.Label], syntax: `JR Address`, opcode: "1100 cccc oooooooo", description: "Jump relative unconditionally."}],
     ...['JAP', 'JALS', 'JALT', 'JALE', 'JAEQ', 'JANE', 'JAGT', 'JAGE', 'JAHI', 'JACC', 'JACS', 'JAVC', 'JAVS', 'JAPL', 'JAMI', 'JAUC', 'JA'].map(j => [j, {operands: [OperandType.Label], syntax: `${j} Address`, opcode: "1100 cccc 10000000", description: `Jump absolute if condition '${j.substring(2)}' is met.`}] as [string, InstructionRule]),
     ...['RL', 'SLA', 'SLL', 'SRA', 'SRL'].map(s => [s, {operands: [OperandType.RegisterOrConstant, OperandType.Register], syntax: `${s} K/Rs, Rd`, opcode: `K: 001x xxKK KKK0 DDDD\nRs: 0110 xx0S SSSR DDDD`, hasOptionalFieldSize: true, requireSameRegisterPage: true, description: `Shift or rotate a register.` }] as [string, InstructionRule])
