@@ -13,7 +13,7 @@ This is an extension for Visual Studio Code for syntax validation for the Texas 
 
 ## Known Issues
 
-MMTM and MMFM no yet implemented as well as the less popular PIXT instructions.
+Most if not all instructions implemented. Not thorooughly tested yet and it's very much a work in progress.
 
 ## Release Notes
 
