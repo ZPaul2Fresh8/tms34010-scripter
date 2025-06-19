@@ -107,10 +107,10 @@ function resolveSymbols(operand: string, definedSymbols: Map<string, SymbolInfo>
     return resolved;
 }
 
-
 function evaluateSymbolicExpression(expression: string, definedSymbols: Map<string, SymbolInfo>): EvaluationResult {
     let resolved = expression;
     
+    // First, resolve all known symbols
     for (let i = 0; i < 10; i++) { 
         let changed = false;
         const symbolNames = Array.from(definedSymbols.keys());
@@ -131,21 +131,26 @@ function evaluateSymbolicExpression(expression: string, definedSymbols: Map<stri
     }
     
     try {
-        resolved = resolved.replace(/([0-9A-F]+)H/gi, "0x$1");
-        resolved = resolved.replace(/>([0-9A-F]+)/gi, "0x$1");
-        resolved = resolved.replace(/([01]+)B/gi, "0b$1");
-        
-        const remainingWords = resolved.match(/(?<!0x|0b)\b[a-zA-Z_][a-zA-Z0-9_.]*/g);
+        let processedForMexp = resolved
+            .replace(/\b([0-9A-F]+)H\b/gi, (match, p1) => parseInt(p1, 16).toString())
+            .replace(/>([0-9A-F]+)\b/gi, (match, p1) => parseInt(p1, 16).toString())
+            .replace(/\b0X([0-9A-F]+)\b/gi, (match, p1) => parseInt(p1, 16).toString())
+            .replace(/\b([01]+)B\b/gi, (match, p1) => parseInt(p1, 2).toString());
+
+        // Check for any remaining labels that can't be resolved to a value
+        const remainingWords = processedForMexp.match(/\b[a-zA-Z_][a-zA-Z0-9_.]*/g);
         if (remainingWords) {
             for (const word of remainingWords) {
-                const symbolInfo = definedSymbols.get(word);
-                if (symbolInfo && !symbolInfo.value) {
-                    return { value: null, errorSymbol: word };
+                if (isNaN(Number(word))) {
+                    const symbolInfo = definedSymbols.get(word);
+                    if (symbolInfo && !symbolInfo.value) {
+                        return { value: null, errorSymbol: word };
+                    }
                 }
             }
         }
 
-        const result = mexp.eval(resolved, [], {});
+        const result = mexp.eval(processedForMexp, [], {});
         if (typeof result === 'number' && !isNaN(result)) {
             return { value: result };
         }
@@ -182,8 +187,27 @@ export function activate(context: vscode.ExtensionContext) {
                 }
                 
                 const parts = trimmedPrefix.split(/[\s,]+/);
-                const mnemonic = parts[0].toUpperCase();
+                const mnemonic = parts[0].toUpperCase().replace('.', '');
                 
+                if (mnemonic === 'BYTE') {
+                    const createLabelSuggestions = () => {
+                        const symbols = documentSymbolsCache.get(document.uri.toString());
+                        if (!symbols) return [];
+                        return Array.from(symbols.entries()).map(([name, info]) => {
+                            let kind: vscode.CompletionItemKind;
+                            switch (info.type) {
+                                case 'label': case 'bss': case 'global': kind = vscode.CompletionItemKind.Reference; break;
+                                case 'equ': case 'set': kind = vscode.CompletionItemKind.Constant; break;
+                                default: kind = vscode.CompletionItemKind.Variable;
+                            }
+                            const item = new vscode.CompletionItem(name, kind);
+                            if (info.value) item.detail = `(equates to: ${info.value})`;
+                            return item;
+                        });
+                    };
+                    return createLabelSuggestions();
+                }
+
                 if (INSTRUCTION_RULES.has(mnemonic)) {
                     const rule = INSTRUCTION_RULES.get(mnemonic)!;
                     const commaCount = (linePrefix.match(/,/g) || []).length;
@@ -615,6 +639,31 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                     diagnostics.push(new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Error));
                 }
             }
+        // --- MODIFICATION: Updated validation logic for .set and .equ ---
+        } else if (upperMnemonic === 'SET' || upperMnemonic === 'EQU') {
+            const equateMatch = text.match(/\b([a-zA-Z_][a-zA-Z0-9_]+)\s+(?:\.equ|equ|\.set|set)\s+(.+)/i);
+            if (equateMatch) {
+                const value = equateMatch[2].trim();
+                let isValid = false;
+
+                // Check if the value is a valid register name
+                if (isRegister(value)) {
+                    isValid = true;
+                } else {
+                    // Otherwise, check if it's a valid numeric expression
+                    const evalResult = evaluateSymbolicExpression(value, definedSymbols);
+                    if (evalResult.value !== null) {
+                        isValid = true;
+                    }
+                }
+
+                if (!isValid) {
+                    const index = lineWithoutComment.indexOf(value);
+                    const range = new vscode.Range(lineIndex, index, lineIndex, index + value.length);
+                    const errorMessage = `Expression for .${upperMnemonic} must resolve to a numeric value or be a valid register.`;
+                    diagnostics.push(new vscode.Diagnostic(range, errorMessage, vscode.DiagnosticSeverity.Error));
+                }
+            }
         } else if (upperMnemonic === 'WORD' || upperMnemonic === 'LONG') {
             const values = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
             if (values.length === 0) {
@@ -625,21 +674,70 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
             const checkLabel = (op: string) => isLabelFormat(op) && definedSymbols.has(op);
             
             for (const value of values) {
-                let isValid = false;
-                if (isImmediate(value)) {
-                    isValid = true;
-                } else if (checkLabel(value)) {
-                    isValid = true;
-                } else {
-                    const evalResult = evaluateSymbolicExpression(value, definedSymbols);
-                    isValid = evalResult.value !== null;
+                const range = (str: string) => {
+                    const index = lineWithoutComment.indexOf(str);
+                    return new vscode.Range(lineIndex, index, lineIndex, index + str.length);
+                };
+
+                if (checkLabel(value)) {
+                    continue;
                 }
 
-                if (!isValid) {
-                    const index = lineWithoutComment.indexOf(value);
-                    const range = new vscode.Range(lineIndex, index, lineIndex, index + value.length);
-                    diagnostics.push(new vscode.Diagnostic(range, `Invalid value '${value}' for .${upperMnemonic}. Must resolve to a number or be a defined label.`, vscode.DiagnosticSeverity.Error));
+                const evalResult = evaluateSymbolicExpression(value, definedSymbols);
+                if (evalResult.value !== null) {
+                    const numValue = evalResult.value;
+                    if (upperMnemonic === 'WORD') {
+                        if (numValue < 0 || numValue > 65535) {
+                            diagnostics.push(new vscode.Diagnostic(range(value), `Value '${value}' (${numValue}) is out of the valid 16-bit range (0 to 65535).`, vscode.DiagnosticSeverity.Error));
+                        }
+                    } else { // LONG
+                        if (numValue < 0 || numValue > 4294967295) {
+                            diagnostics.push(new vscode.Diagnostic(range(value), `Value '${value}' (${numValue}) is out of the valid 32-bit range (0 to 4294967295).`, vscode.DiagnosticSeverity.Error));
+                        }
+                    }
+                } else {
+                     diagnostics.push(new vscode.Diagnostic(range(value), `Invalid value '${value}' for .${upperMnemonic}. Must resolve to a number or be a defined label.`, vscode.DiagnosticSeverity.Error));
                 }
+            }
+        } else if (upperMnemonic === 'BYTE') {
+            const values = operandStr.match(/"[^"]*"|[^,]+/g)?.map(s => s.trim()).filter(s => s.length > 0) || [];
+            if (values.length === 0) {
+                const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
+                diagnostics.push(new vscode.Diagnostic(range, `.${upperMnemonic} directive requires at least one value.`, vscode.DiagnosticSeverity.Error));
+                continue;
+            }
+
+            let totalBytes = 0;
+            for (const value of values) {
+                const range = (str: string) => {
+                    const index = lineWithoutComment.indexOf(str);
+                    return new vscode.Range(lineIndex, index, lineIndex, index + str.length);
+                };
+
+                if (value.startsWith('"') && value.endsWith('"')) {
+                    totalBytes += value.length - 2;
+                    continue; 
+                }
+
+                const evalResult = evaluateSymbolicExpression(value, definedSymbols);
+                if (evalResult.value !== null) {
+                    if (evalResult.value >= -128 && evalResult.value <= 255) {
+                        totalBytes++;
+                    } else {
+                        diagnostics.push(new vscode.Diagnostic(range(value), `Value '${value}' (${evalResult.value}) is out of the valid 8-bit range (-128 to 255).`, vscode.DiagnosticSeverity.Error));
+                    }
+                } else {
+                    diagnostics.push(new vscode.Diagnostic(range(value), `Invalid value '${value}' for .${upperMnemonic}. Must resolve to an 8-bit number or be a string literal.`, vscode.DiagnosticSeverity.Error));
+                }
+            }
+
+            if (totalBytes > 0 && totalBytes % 2 !== 0) {
+                const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
+                diagnostics.push(new vscode.Diagnostic(
+                    range,
+                    `Byte array has an odd length (${totalBytes} bytes) and is not word-aligned.`,
+                    vscode.DiagnosticSeverity.Warning
+                ));
             }
         } else if (upperMnemonic === 'BSS') {
             const bssOperands = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
