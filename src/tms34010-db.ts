@@ -22,6 +22,7 @@ export interface InstructionRule {
     syntax: string;
     opcode: string;
     description: string;
+    flagsAffected?: string;
     hasOptionalFieldSize?: boolean;
     requireSameRegisterPage?: boolean;
     minOperands?: number;
@@ -37,7 +38,7 @@ export const TMS34010_REGISTERS = new Set([...A_REGISTERS, ...B_REGISTERS, ...OT
 
 export const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
     ['ABS',   { operands: [OperandType.Register], syntax: "ABS Rd", opcode: "0000 0011 100R DDDD", description: "Store absolute value of a register." }],
-    ['ADD',   { operands: [OperandType.Register, OperandType.Register], syntax: "ADD Rs, Rd", opcode: "0100 000S SSSR DDDD", hasOptionalFieldSize: true, requireSameRegisterPage: true, description: "Add source register to destination register." }],
+    ['ADD',   { operands: [OperandType.Register, OperandType.Register], syntax: "ADD Rs, Rd", opcode: "0100 000S SSSR DDDD", flagsAffected: "N, C, Z, V", hasOptionalFieldSize: true, requireSameRegisterPage: true, description: "Add source register to destination register." }],
     ['ADDC',  { operands: [OperandType.Register, OperandType.Register], syntax: "ADDC Rs, Rd", opcode: "0100 001S SSSR DDDD", requireSameRegisterPage: true, description: "Add registers with carry." }],
     ['ADDI',  { operands: [OperandType.Immediate, OperandType.Register], syntax: "ADDI IW/IL, Rd", opcode: "IW: 0000 1011 000R DDDD\nIL: 0000 1011 001R DDDD", hasOptionalFieldSize: true, description: "Add immediate value to register." }],
     ['ADDK',  { operands: [OperandType.Constant, OperandType.Register], syntax: "ADDK K, Rd", opcode: "0001 00KK KKKR DDDD", hasOptionalFieldSize: true, description: "Add constant (1-32) to register." }],
@@ -122,7 +123,7 @@ export const INSTRUCTION_RULES: Map<string, InstructionRule> = new Map([
 ]);
 
 export const KNOWN_DIRECTIVES = new Set([
-    'equ', 'word', 'long', 'byte',
+    'equ', 'word', 'long', 'byte', '.even',
     '.set', '.equ', '.word', '.long', '.string', '.asciiz', '.byte', '.field', '.sint', '.float',
     '.sect', '.bss', '.text', '.data', '.align', '.space',
     '.global', '.globl',

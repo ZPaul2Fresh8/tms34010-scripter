@@ -17,6 +17,7 @@ type SymbolInfo = {
     uri: vscode.Uri; 
     range: vscode.Range;
     value: string | null;
+    size?: string; // MODIFIED: Added for .bss size
     type: 'label' | 'equ' | 'set' | 'bss' | 'global';
     declaration?: {
         uri: vscode.Uri;
@@ -268,6 +269,12 @@ export function activate(context: vscode.ExtensionContext) {
                 if (INSTRUCTION_RULES.has(word)) {
                     const rule = INSTRUCTION_RULES.get(word)!;
                     const content = new vscode.MarkdownString(`**${word}**\n\n*${rule.syntax}*\n\n${rule.description}`);
+                    
+                    // MODIFIED: Added display for affected flags
+                    if (rule.flagsAffected) {
+                        content.appendMarkdown(`\n\n**Flags Affected:** ${rule.flagsAffected}`);
+                    }
+                    
                     content.appendCodeblock(rule.opcode, 'plaintext');
                     return new vscode.Hover(content, range);
                 }
@@ -277,14 +284,12 @@ export function activate(context: vscode.ExtensionContext) {
                      return new vscode.Hover(content, range);
                 }
 
-                                // --- MODIFICATION START ---
-                // Check if the word is a symbol in the cache
+                // MODIFIED: Added hover provider for all symbol types
                 const symbols = documentSymbolsCache.get(document.uri.toString());
                 if (symbols && symbols.has(word)) {
                     const symbolInfo = symbols.get(word)!;
                     let content: vscode.MarkdownString | undefined;
 
-                    // Handle .equ and .set symbols
                     if ((symbolInfo.type === 'equ' || symbolInfo.type === 'set') && symbolInfo.value) {
                         const title = symbolInfo.type === 'equ' ? 'Equate' : 'Set Alias';
                         const evalResult = evaluateSymbolicExpression(symbolInfo.value, symbols);
@@ -295,9 +300,19 @@ export function activate(context: vscode.ExtensionContext) {
                         }
 
                         content = new vscode.MarkdownString(`**${title}:** \`${word}\`\n\n${details}`);
-                    }
-                    // Handle labels and bss symbols
-                    else if (symbolInfo.type === 'label' || symbolInfo.type === 'bss' || symbolInfo.type === 'global') {
+
+                    } else if (symbolInfo.type === 'bss' && symbolInfo.size) {
+                        const evalResult = evaluateSymbolicExpression(symbolInfo.size, symbols);
+                        
+                        let details = `Reserves space of **${symbolInfo.size}** bytes.`;
+                        if (evalResult.value !== null) {
+                            details += `\n\n*(Evaluates to ${evalResult.value} bytes)*`;
+                        }
+                        
+                        content = new vscode.MarkdownString(`**BSS Symbol:** \`${word}\`\n\n${details}`);
+                        content.appendMarkdown(`\n\n*Defined at:* \`${symbolInfo.uri.fsPath.split(path.sep).pop()}\` (Line ${symbolInfo.range.start.line + 1})`);
+
+                    } else if (symbolInfo.type === 'label' || symbolInfo.type === 'global') {
                         content = new vscode.MarkdownString(`**Symbol:** \`${word}\`\n\n**Type:** \`.${symbolInfo.type}\``);
                         content.appendMarkdown(`\n\n*Defined at:* \`${symbolInfo.uri.fsPath.split(path.sep).pop()}\` (Line ${symbolInfo.range.start.line + 1})`);
                     }
@@ -306,7 +321,6 @@ export function activate(context: vscode.ExtensionContext) {
                         return new vscode.Hover(content, range);
                     }
                 }
-                // --- MODIFICATION END ---
 
                 return null;
             }
@@ -316,6 +330,29 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.languages.registerDefinitionProvider('tms-assembly', {
             provideDefinition(document, position, token): vscode.ProviderResult<vscode.Definition> {
+                const line = document.lineAt(position.line);
+                // This regex is similar to the one in parseSymbols
+                const includeMatch = line.text.match(/^\s*\.include\s+(?:"([^"]+)"|([^\s"]+))/i);
+
+                // --- NEW: Handle .include directives ---
+                if (includeMatch) {
+                    const fileName = includeMatch[1] || includeMatch[2];
+                    const matchStartIndex = line.text.indexOf(fileName);
+                    const matchEndIndex = matchStartIndex + fileName.length;
+                    const fileNameRange = new vscode.Range(position.line, matchStartIndex, position.line, matchEndIndex);
+
+                    // Check if the user clicked specifically on the filename
+                    if (fileNameRange.contains(position)) {
+                        const currentDir = path.dirname(document.uri.fsPath);
+                        const includeUri = vscode.Uri.file(path.join(currentDir, fileName));
+                        
+                        // Create a location that points to the beginning of the included file
+                        const targetPosition = new vscode.Position(0, 0);
+                        return new vscode.Location(includeUri, targetPosition);
+                    }
+                }
+
+                // --- EXISTING: Fallback to symbol definition logic ---
                 const wordRange = document.getWordRangeAtPosition(position);
                 if (!wordRange) return undefined;
                 
@@ -354,20 +391,36 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(doc => DIAGNOSTIC_COLLECTION.delete(doc.uri)));
 }
 
-function defineSymbol(name: string, type: 'label' | 'equ' | 'set' | 'bss' | 'global', value: string | null, range: vscode.Range | null, definedSymbols: Map<string, SymbolInfo>, uri: vscode.Uri, diagnostics: vscode.Diagnostic[]) {
+function defineSymbol(
+    name: string,
+    type: 'label' | 'equ' | 'set' | 'bss' | 'global',
+    value: string | null,
+    range: vscode.Range | null,
+    definedSymbols: Map<string, SymbolInfo>,
+    uri: vscode.Uri,
+    diagnostics: vscode.Diagnostic[],
+    size?: string // This parameter should be here.
+) {
     if (!range) return;
     const existingSymbol = definedSymbols.get(name);
 
     if (existingSymbol) {
-        if (existingSymbol.type === 'global' && type === 'label') {
+        // If a '.global' declaration exists and we find a concrete definition
+        // ('label' or 'bss'), this is a valid fulfillment, not a duplicate.
+        if (existingSymbol.type === 'global' && (type === 'label' || type === 'bss')) {
             const newInfo: SymbolInfo = {
-                uri, range, value, type,
+                uri,
+                range,
+                value,
+                type,
+                size, // Ensure size is carried over.
                 declaration: { uri: existingSymbol.uri, range: existingSymbol.range }
             };
             definedSymbols.set(name, newInfo);
             return;
         }
 
+        // Otherwise, if it's not a re-settable 'set' symbol, it's a duplicate.
         if (existingSymbol.type !== 'set') {
             const diagnostic = new vscode.Diagnostic(range, `Duplicate symbol definition: '${name}'`, vscode.DiagnosticSeverity.Error);
             diagnostic.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(existingSymbol.uri, existingSymbol.range), 'First defined here')];
@@ -376,7 +429,8 @@ function defineSymbol(name: string, type: 'label' | 'equ' | 'set' | 'bss' | 'glo
         }
     }
 
-    definedSymbols.set(name, { uri, range, value, type });
+    // If no symbol existed, or it was a 'set' symbol, define/re-define it.
+    definedSymbols.set(name, { uri, range, value, type, size });
 }
 
 async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string, SymbolInfo>, processedFiles: Set<string>, diagnostics: vscode.Diagnostic[]): Promise<void> {
@@ -428,7 +482,8 @@ async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string
         
         const globalMatch = trimmedText.match(/^\.(global|globl)\s+(.+)/i);
         const equateMatch = trimmedText.match(/\b([a-zA-Z_][a-zA-Z0-9_]+)\s+(\.equ|equ|\.set|set)\s+(.+)/i);
-        const bssMatch = trimmedText.match(/\.bss\s+([a-zA-Z_][a-zA-Z0-9_.]+)/i);
+        // MODIFIED: Corrected regex to be lenient and capture all parts for .bss
+        const bssMatch = trimmedText.match(/\.bss\s+([a-zA-Z_][a-zA-Z0-9_.]+)(.*)/i);
         const labelMatch = trimmedText.match(/^([a-zA-Z_][a-zA-Z0-9_.]+):/);
         
         if (globalMatch) {
@@ -450,8 +505,18 @@ async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string
             const equateName = equateMatch[1];
             defineSymbol(equateName, equateMatch[2].toLowerCase().replace('.', '') as 'equ'|'set', equateMatch[3].trim(), symbolRange(equateName), definedSymbols, doc.uri, diagnostics);
         } else if (bssMatch) {
+            // MODIFIED: Corrected logic to parse size and call updated defineSymbol
             const bssName = bssMatch[1];
-            defineSymbol(bssName, 'bss', null, symbolRange(bssName), definedSymbols, doc.uri, diagnostics);
+            const restOfLine = bssMatch[2].trim();
+            let size;
+
+            if (restOfLine.startsWith(',')) {
+                const operands = restOfLine.substring(1).trim().split(',');
+                if (operands.length > 0) {
+                    size = operands[0].trim();
+                }
+            }
+            defineSymbol(bssName, 'bss', null, symbolRange(bssName), definedSymbols, doc.uri, diagnostics, size);
         } else if (labelMatch) {
             const labelName = labelMatch[1];
             defineSymbol(labelName, 'label', null, symbolRange(labelName), definedSymbols, doc.uri, diagnostics);
@@ -670,21 +735,17 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                     diagnostics.push(new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Error));
                 }
             }
-        // --- MODIFICATION: New, more robust validation for .set and .equ ---
         } else if (upperMnemonic === 'SET' || upperMnemonic === 'EQU') {
             const equateMatch = text.match(/\b([a-zA-Z_][a-zA-Z0-9_]+)\s+(?:\.equ|equ|\.set|set)\s+(.+)/i);
             if (equateMatch) {
                 const value = equateMatch[2].trim();
                 let isValid = false;
 
-                // First, resolve aliases fully
                 const resolvedValue = resolveSymbols(value, definedSymbols);
 
-                // Check if the resolved value is a register or a simple immediate number
                 if (isRegister(resolvedValue) || isImmediate(resolvedValue)) {
                     isValid = true;
                 } 
-                // Then, check for the special [word, word] syntax on the original value
                 else if (value.startsWith('[') && value.endsWith(']')) {
                     const bracketContent = value.substring(1, value.length - 1);
                     const parts = bracketContent.split(',');
@@ -699,7 +760,6 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                     }
                 }
                 else {
-                    // Finally, treat it as a complex expression
                     const evalResult = evaluateSymbolicExpression(value, definedSymbols);
                     if (evalResult.value !== null) {
                         isValid = true;
