@@ -185,8 +185,21 @@ export function activate(context: vscode.ExtensionContext) {
     const debouncedUpdateDiagnostics = debounce(updateDiagnostics, 300);
     
     context.subscriptions.push(
+        // The call to registerCompletionItemProvider is modified
         vscode.languages.registerCompletionItemProvider('tms-assembly', {
             provideCompletionItems(document, position, token, context) {
+                // --- NEW LOGIC START ---
+                // If the trigger was the user typing a period, provide directive completions.
+                if (context.triggerCharacter === '.') {
+                    // Provide suggestions from the list of known directives
+                    return Array.from(KNOWN_DIRECTIVES).map(dir => {
+                        // Clean the leading period if it exists, so we don't get '..sect'
+                        const cleanDir = dir.startsWith('.') ? dir.substring(1) : dir;
+                        return new vscode.CompletionItem(cleanDir, vscode.CompletionItemKind.Keyword);
+                    });
+                }
+                // --- NEW LOGIC END ---
+
                 const line = document.lineAt(position);
                 const linePrefix = line.text.substr(0, position.character);
                 const trimmedPrefix = linePrefix.trimLeft();
@@ -264,7 +277,7 @@ export function activate(context: vscode.ExtensionContext) {
                 
                 return undefined;
             }
-        }, ' ', ',', '*')
+        }, ' ', ',', '*', '.' /* --- MODIFIED: Added '.' as a trigger character --- */)
     );
     
     context.subscriptions.push(
