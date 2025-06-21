@@ -58,7 +58,10 @@ const isConstant = (op: string): boolean => {
     return numValue !== null && numValue >= 1 && numValue <= 32;
 };
 
-const isFlag = (op: string): boolean => op === '0' || op === '1';
+const isFlag = (op: string): boolean => {
+    const lowerOp = op.toLowerCase();
+    return lowerOp === '0' || lowerOp === '1' || lowerOp === 'w' || lowerOp === 'l';
+};
 const isFillMode = (op: string): boolean => op.toUpperCase() === 'L' || op.toUpperCase() === 'XY';
 const isPixbltMode = (op: string): boolean => ['L', 'XY', 'B'].includes(op.toUpperCase());
 const isLabelFormat = (op: string): boolean => /^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(op) && !isRegister(op);
@@ -501,9 +504,26 @@ async function parseSymbols(doc: vscode.TextDocument, definedSymbols: Map<string
                     definedSymbols.set(symbolName, { uri: doc.uri, range, value: null, type: 'global' });
                 }
             }
-        } else if (equateMatch) {
+                } else if (equateMatch) {
             const equateName = equateMatch[1];
-            defineSymbol(equateName, equateMatch[2].toLowerCase().replace('.', '') as 'equ'|'set', equateMatch[3].trim(), symbolRange(equateName), definedSymbols, doc.uri, diagnostics);
+            
+            // --- THIS IS THE FIX ---
+            // Get the raw value string from the regex match, which might include a comment.
+            const rawValue = equateMatch[3];
+            
+            // Split the raw value by the comment character and take the first part, then trim whitespace.
+            const cleanValue = rawValue.split(';')[0].trim(); 
+            
+            // Pass the clean, comment-free value to the defineSymbol function.
+            defineSymbol(
+                equateName, 
+                equateMatch[2].toLowerCase().replace('.', '') as 'equ'|'set', 
+                cleanValue, 
+                symbolRange(equateName), 
+                definedSymbols, 
+                doc.uri, 
+                diagnostics
+            );
         } else if (bssMatch) {
             // MODIFIED: Corrected logic to parse size and call updated defineSymbol
             const bssName = bssMatch[1];
@@ -541,7 +561,16 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
 
     for (let lineIndex = 0; lineIndex < doc.lineCount; lineIndex++) {
         const line = doc.lineAt(lineIndex);
-        const text = line.text.trim();
+
+        // Remove the EOF/SUB character (ASCII 26, Unicode \u001a) before any other processing.
+        const cleanedText = line.text.replace(/\u001a/g, '');
+        // Now, use the cleanedText for all subsequent operations.
+        const lineWithoutComment = cleanedText.split(';')[0];
+        const text = lineWithoutComment.trim();
+
+        
+        
+        //const text = line.text.trim();
         const upperText = text.toUpperCase();
 
         if (upperText.startsWith('.GLOBAL') || upperText.startsWith('.GLOBL')) {
@@ -665,7 +694,8 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                 
                 if (rule.hasOptionalFieldSize && i === rule.operands.length) {
                     if (!isFlag(operandValue)) {
-                        diagnostics.push(new vscode.Diagnostic(range, `Invalid field size. Expected 0 or 1.`, vscode.DiagnosticSeverity.Error));
+                        // The error message is now more helpful
+                        diagnostics.push(new vscode.Diagnostic(range, `Invalid field size. Expected 0 (W) or 1 (L).`, vscode.DiagnosticSeverity.Error));
                     }
                     continue; 
                 }
