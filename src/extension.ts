@@ -405,6 +405,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(doc => DIAGNOSTIC_COLLECTION.delete(doc.uri)));
 }
 
+// --- MODIFIED: The check now includes 'equ' and 'set' ---
 function defineSymbol(
     name: string,
     type: 'label' | 'equ' | 'set' | 'bss' | 'global',
@@ -420,7 +421,8 @@ function defineSymbol(
     const existingSymbol = definedSymbols.get(name);
 
     if (existingSymbol) {
-        if (existingSymbol.type === 'global' && (type === 'label' || type === 'bss')) {
+        // A .global declaration can be fulfilled by a label, bss, equ, or set definition.
+        if (existingSymbol.type === 'global' && (type === 'label' || type === 'bss' || type === 'equ' || type === 'set')) {
             const newInfo: SymbolInfo = {
                 uri,
                 range,
