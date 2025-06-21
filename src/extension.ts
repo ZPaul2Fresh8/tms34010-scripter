@@ -25,6 +25,12 @@ type SymbolInfo = {
     };
 };
 
+type SectionInfo = {
+    uri: vscode.Uri;
+    range: vscode.Range;
+    type: 'sect' | 'usect';
+}
+
 type EvaluationResult = {
     value: number | null;
     errorSymbol?: string;
@@ -440,11 +446,12 @@ async function parseSymbols(
     definedSymbols: Map<string, SymbolInfo>,
     processedFiles: Set<string>,
     diagnosticsByUri: Map<string, vscode.Diagnostic[]>,
+    definedSections: Map<string, SectionInfo>,
     inConditionalBlock = false
 ): Promise<boolean> {
     const uriString = doc.uri.toString();
     if (processedFiles.has(uriString)) {
-        return inConditionalBlock; 
+        return inConditionalBlock;
     }
     processedFiles.add(uriString);
     
@@ -461,7 +468,7 @@ async function parseSymbols(
             
             try {
                 const includedDoc = await vscode.workspace.openTextDocument(includeUri);
-                currentConditionalState = await parseSymbols(includedDoc, definedSymbols, processedFiles, diagnosticsByUri, currentConditionalState);
+                currentConditionalState = await parseSymbols(includedDoc, definedSymbols, processedFiles, diagnosticsByUri, definedSections, currentConditionalState);
             } catch (err) {
                 const range = new vscode.Range(lineIndex, line.text.indexOf(fileName), lineIndex, line.text.indexOf(fileName) + fileName.length);
                 const diagnostic = new vscode.Diagnostic(range, `Included file not found: ${fileName}`, vscode.DiagnosticSeverity.Error);
@@ -501,12 +508,13 @@ async function parseSymbols(
         };
         
         const globalMatch = trimmedText.match(/^\.(global|globl)\s+(.+)/i);
-        const equateMatch = trimmedText.match(/\b([a-zA-Z_][a-zA-Z0-9_]+)\s+(\.equ|equ|\.set|set)\s+(.+)/i);
+        const equateMatch = trimmedText.match(/\b([a-zA-Z_][a-zA-Z0-9_]+)\s+(\.equ|equ|\.set|set|\.usect|usect)\s+(.+)/i);
         const bssMatch = trimmedText.match(/\.bss\s+([a-zA-Z_][a-zA-Z0-9_.]+)(.*)/i);
         const labelMatch = trimmedText.match(/^([a-zA-Z_][a-zA-Z0-9_.]+):/);
-        
+        const sectMatch = trimmedText.match(/^\.sect\s+(.*)/i);
+
         if (globalMatch) {
-            const symbolsStr = globalMatch[2];
+            const symbolsStr = globalMatch[2].split(';')[0];
             const globalSymbols = symbolsStr.split(',').map(s => s.trim()).filter(Boolean);
             for (const symbolName of globalSymbols) {
                 const range = symbolRange(symbolName);
@@ -521,21 +529,58 @@ async function parseSymbols(
                 }
             }
         } else if (equateMatch) {
-            const equateName = equateMatch[1];
+            const name = equateMatch[1];
+            const directive = equateMatch[2].toLowerCase().replace('.', '');
             const rawValue = equateMatch[3];
             const cleanValue = rawValue.split(';')[0].trim();
-            defineSymbol(equateName, equateMatch[2].toLowerCase().replace('.', '') as 'equ'|'set', cleanValue, symbolRange(equateName), definedSymbols, doc.uri, diagnosticsByUri, currentConditionalState);
+            
+            if (directive === 'usect') {
+                defineSymbol(name, 'bss', null, symbolRange(name), definedSymbols, doc.uri, diagnosticsByUri, currentConditionalState);
+                const operands = cleanValue.split(',');
+                if (operands.length > 0) {
+                    const sectionName = operands[0].trim();
+                    const sectionRange = symbolRange(sectionName);
+                    if (sectionRange) {
+                        const existingSection = definedSections.get(sectionName);
+                        if (existingSection && existingSection.type === 'sect') {
+                            const diagnostic = new vscode.Diagnostic(sectionRange, `Section name '${sectionName}' cannot be used with .usect because it was already defined with .sect.`, vscode.DiagnosticSeverity.Error);
+                            diagnostic.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(existingSection.uri, existingSection.range), 'First defined here')];
+                            if (!diagnosticsByUri.has(uriString)) diagnosticsByUri.set(uriString, []);
+                            diagnosticsByUri.get(uriString)!.push(diagnostic);
+                        } else if (!existingSection) {
+                            definedSections.set(sectionName, { uri: doc.uri, range: sectionRange, type: 'usect' });
+                        }
+                    }
+                }
+            } else {
+                defineSymbol(name, directive as 'equ'|'set', cleanValue, symbolRange(name), definedSymbols, doc.uri, diagnosticsByUri, currentConditionalState);
+            }
         } else if (bssMatch) {
             const bssName = bssMatch[1];
             const restOfLine = bssMatch[2].trim();
             let size;
             if (restOfLine.startsWith(',')) {
-                const operands = restOfLine.substring(1).trim().split(',');
+                const operands = restOfLine.substring(1).trim().split(';')[0].split(',');
                 if (operands.length > 0) {
                     size = operands[0].trim();
                 }
             }
             defineSymbol(bssName, 'bss', null, symbolRange(bssName), definedSymbols, doc.uri, diagnosticsByUri, currentConditionalState, size);
+        } else if (sectMatch) {
+            const sectionNameWithComment = sectMatch[1].trim();
+            const sectionName = sectionNameWithComment.split(';')[0].trim();
+            const sectionRange = symbolRange(sectionName);
+            if (sectionRange) {
+                const existingSection = definedSections.get(sectionName);
+                if (existingSection && existingSection.type === 'usect') {
+                    const diagnostic = new vscode.Diagnostic(sectionRange, `Section name '${sectionName}' cannot be used with .sect because it was already defined with .usect.`, vscode.DiagnosticSeverity.Error);
+                    diagnostic.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(existingSection.uri, existingSection.range), 'First defined here')];
+                    if (!diagnosticsByUri.has(uriString)) diagnosticsByUri.set(uriString, []);
+                    diagnosticsByUri.get(uriString)!.push(diagnostic);
+                } else if (!existingSection) {
+                    definedSections.set(sectionName, { uri: doc.uri, range: sectionRange, type: 'sect' });
+                }
+            }
         } else if (labelMatch) {
             const labelName = labelMatch[1];
             defineSymbol(labelName, 'label', null, symbolRange(labelName), definedSymbols, doc.uri, diagnosticsByUri, currentConditionalState);
@@ -555,8 +600,9 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
     const definedSymbols = new Map<string, SymbolInfo>();
     const processedFiles = new Set<string>();
     const diagnosticsByUri = new Map<string, vscode.Diagnostic[]>();
+    const definedSections = new Map<string, SectionInfo>();
     
-    await parseSymbols(doc, definedSymbols, processedFiles, diagnosticsByUri);
+    await parseSymbols(doc, definedSymbols, processedFiles, diagnosticsByUri, definedSections);
     documentSymbolsCache.set(doc.uri.toString(), definedSymbols);
 
     for (const uriString of processedFiles) {
@@ -576,14 +622,14 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
             const lineWithoutComment = cleanedText.split(';')[0];
             const text = lineWithoutComment.trim();
             
-            if (text.length === 0 || text.startsWith('*') || text.match(/^\s*\.(if|else|endif)/i)) {
+            if (text.length === 0 || text.startsWith('*') || text.match(/^\s*\.(if|else|endif|include)/i)) {
                 continue;
             }
 
             const upperText = text.toUpperCase();
             if (upperText.startsWith('.GLOBAL') || upperText.startsWith('.GLOBL')) {
                 const parts = text.split(/\s+/);
-                const operandStr = parts.slice(1).join(' ');
+                const operandStr = parts.slice(1).join(' ').split(';')[0];
                 const globalSymbols = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
 
                 for (const symbol of globalSymbols) {
@@ -613,7 +659,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
             }
 
             const mnemonic = parts[mnemonicIndex];
-            const operandStr = parts.slice(mnemonicIndex + 1).join(' ');
+            const operandStr = parts.slice(mnemonicIndex + 1).join(' ').split(';')[0].trim();
             const upperMnemonic = mnemonic.toUpperCase().replace('.', '');
             
             if (upperMnemonic === 'MMTM' || upperMnemonic === 'MMFM') {
@@ -634,7 +680,6 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                 }
 
                 validateRegisterList(listOperand, lineIndex, lineWithoutComment, diagnostics);
-                continue; 
             } else if (upperMnemonic === 'PIXT') {
                 const operandParts = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
                 if (operandParts.length !== 2) {
@@ -660,10 +705,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                         diagnostics.push(new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Error));
                     }
                 }
-                continue;
-            }
-            
-            if (KNOWN_INSTRUCTIONS.has(upperMnemonic)) {
+            } else if (KNOWN_INSTRUCTIONS.has(upperMnemonic)) {
                 const rule = INSTRUCTION_RULES.get(upperMnemonic)!;
                 const operandParts = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
                 
@@ -677,8 +719,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                     continue;
                 }
                 
-                const mnemonicStartInLine = line.text.indexOf(mnemonic, line.firstNonWhitespaceCharacterIndex);
-                let searchStart = mnemonicStartInLine + mnemonic.length;
+                let searchStart = line.text.toUpperCase().indexOf(upperMnemonic) + upperMnemonic.length;
 
                 for (let i = 0; i < operandParts.length; i++) {
                     const originalOperandValue = operandParts[i];
@@ -708,23 +749,8 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                     switch (expectedType) {
                         case OperandType.Register: isValid = isRegister(operandValue); break;
                         case OperandType.Immediate:
-                            if (isImmediate(operandValue)) {
-                                isValid = true;
-                            } else {
-                                const evalResult = evaluateSymbolicExpression(operandValue, definedSymbols);
-                                isValid = evalResult.value !== null;
-                                if (!isValid && evalResult.errorSymbol) {
-                                    const symInfo = definedSymbols.get(evalResult.errorSymbol);
-                                    const symType = symInfo ? `a memory location defined by .${symInfo.type}` : 'an undefined symbol';
-                                    diagnostics.push(new vscode.Diagnostic(range, `Symbol '${evalResult.errorSymbol}' is ${symType} and cannot be used in this expression.`, vscode.DiagnosticSeverity.Error));
-                                    continue;
-                                }
-                            }
-                            break;
                         case OperandType.ImmediateOrLabel:
-                            if (isImmediate(operandValue)) {
-                                isValid = true;
-                            } else if (checkLabel(operandValue)) {
+                            if (isImmediate(operandValue) || checkLabel(operandValue)) {
                                 isValid = true;
                             } else {
                                 const evalResult = evaluateSymbolicExpression(operandValue, definedSymbols);
@@ -741,7 +767,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                         case OperandType.Flag: isValid = isFlag(operandValue); break;
                         case OperandType.FillMode: isValid = isFillMode(operandValue); break;
                         case OperandType.PixbltMode: isValid = isPixbltMode(operandValue); break;
-                        case OperandType.RegisterList: isValid = true; break;
+                        case OperandType.RegisterList: isValid = true; break; // Validated by MMTM/MMFM
                         case OperandType.Label:
                             isValid = checkLabel(operandValue);
                             if (isLabelFormat(operandValue) && !isValid) {
@@ -878,7 +904,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
             } else if (upperMnemonic === 'BSS') {
                 const bssOperands = operandStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
                 
-                if (bssOperands.length < 1) { // .bss can just have a symbol
+                if (bssOperands.length < 1) {
                     const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
                     diagnostics.push(new vscode.Diagnostic(range, '.bss directive requires at least a symbol operand.', vscode.DiagnosticSeverity.Error));
                     continue;
