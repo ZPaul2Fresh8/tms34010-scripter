@@ -169,6 +169,85 @@ function evaluateSymbolicExpression(expression: string, definedSymbols: Map<stri
     return { value: null };
 }
 
+// --- NEW OPCODE BUILDING LOGIC ---
+function getRegisterNumber(reg: string): number {
+    const upperReg = reg.toUpperCase();
+    let index = A_REGISTERS_ORDERED.indexOf(upperReg);
+    if (index !== -1) return index;
+    
+    index = B_REGISTERS_ORDERED.indexOf(upperReg);
+    if (index !== -1) return index;
+
+    throw new Error(`Invalid register name: ${reg}`);
+}
+
+function buildOpcodeFromLine(lineText: string, definedSymbols: Map<string, SymbolInfo>): [number, number[]] {
+    const codePart = lineText.split(';')[0].trim();
+    if (!codePart) throw new Error("Empty line");
+
+    const parts = codePart.split(/\s+/);
+    const mnemonic = parts.shift()?.toUpperCase();
+    if (!mnemonic || !INSTRUCTION_RULES.has(mnemonic)) {
+        throw new Error("Invalid mnemonic");
+    }
+
+    const rule = INSTRUCTION_RULES.get(mnemonic)!;
+    const operandStr = parts.join(' ');
+    const operands = operandStr.split(',').map(p => p.trim()).filter(p => p);
+
+    let opcodeTemplate = rule.opcode;
+    const additionalWords: number[] = [];
+
+    if (rule.operands.length === 0 || rule.operands[0] === OperandType.None) {
+        return [parseInt(opcodeTemplate.replace(/\s/g, ''), 2), additionalWords];
+    }
+    
+    const firstOperandType = rule.operands[0];
+    let isWord = false;
+
+    // Handle instructions with IW/IL templates
+    if (opcodeTemplate.includes('\n')) {
+        const resolvedOperand = resolveSymbols(operands[0], definedSymbols);
+        const numValue = parseNumericValue(resolvedOperand);
+        isWord = numValue !== null && numValue >= -32768 && numValue <= 32767;
+        
+        const templates = opcodeTemplate.split('\n');
+        opcodeTemplate = isWord ? templates[0].split(':')[1].trim() : templates[1].split(':')[1].trim();
+    }
+    
+    let binaryOpcode = opcodeTemplate.replace(/\s/g, '');
+
+    const rdStr = operands[operands.length-1];
+    const rsStr = operands.length > 1 ? operands[0] : '';
+    
+    const rd = getRegisterNumber(rdStr);
+    const rdBinary = rd.toString(2).padStart(4, '0');
+    const rdFile = A_REGISTERS.has(rdStr.toUpperCase()) ? '0' : '1';
+    binaryOpcode = binaryOpcode.replace(/R/g, rdFile).replace(/DDDD/g, rdBinary);
+
+    if (rsStr && isRegister(rsStr)) {
+        const rs = getRegisterNumber(rsStr);
+        const rsBinary = rs.toString(2).padStart(4, '0');
+        const rsFile = A_REGISTERS.has(rsStr.toUpperCase()) ? '0' : '1';
+        binaryOpcode = binaryOpcode.replace(/S/g, rsFile).replace(/SSSS/g, rsBinary);
+    }
+    
+    if (firstOperandType === OperandType.Constant) {
+        const kValueResult = evaluateSymbolicExpression(operands[0], definedSymbols);
+        if (kValueResult.value === null || kValueResult.value < 1 || kValueResult.value > 32) throw new Error("K value out of range 1-32");
+        const kBinary = (kValueResult.value - 1).toString(2).padStart(5, '0');
+        binaryOpcode = binaryOpcode.replace(/K{5}/g, kBinary);
+    } else if (firstOperandType === OperandType.Immediate || firstOperandType === OperandType.ImmediateOrLabel) {
+        const evalResult = evaluateSymbolicExpression(operands[0], definedSymbols);
+        if(evalResult.value === null) throw new Error("Invalid immediate value");
+        additionalWords.push(evalResult.value);
+    }
+    
+    binaryOpcode = binaryOpcode.replace(/[A-Z]/g, '0');
+
+    return [parseInt(binaryOpcode, 2), additionalWords];
+}
+
 const KNOWN_INSTRUCTIONS = new Set(INSTRUCTION_RULES.keys());
 const DIAGNOSTIC_COLLECTION = vscode.languages.createDiagnosticCollection('tms34010');
 const documentSymbolsCache = new Map<string, Map<string, SymbolInfo>>();
@@ -184,7 +263,7 @@ function debounce<F extends (...args: any[]) => any>(func: F, waitFor: number) {
 export function activate(context: vscode.ExtensionContext) {
     const debouncedUpdateDiagnostics = debounce(updateDiagnostics, 300);
     
-    // autocomplete
+    // Autocomplete
     context.subscriptions.push(
         vscode.languages.registerCompletionItemProvider('tms-assembly', {
             provideCompletionItems(document, position, token, context) {
@@ -272,27 +351,52 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }, ' ', ',', '*', '.', '@')
     );
-    
     // Hover
     context.subscriptions.push(
         vscode.languages.registerHoverProvider('tms-assembly', {
-            provideHover(document, position, token) {
+provideHover(document, position, token) {
+                const line = document.lineAt(position.line);
+                const lineText = line.text.trim();
+                const lineParts = lineText.split(/\s+/);
+                const mnemonic = lineParts.length > 0 ? lineParts[0].toUpperCase() : '';
+
+                if (INSTRUCTION_RULES.has(mnemonic)) {
+                    const rule = INSTRUCTION_RULES.get(mnemonic)!;
+                    const content = new vscode.MarkdownString(`**${mnemonic}**\n\n*${rule.syntax}*\n\n${rule.description}`);
+                    
+                    if (rule.opcode) {
+                        content.appendCodeblock(rule.opcode, 'plaintext');
+                    }
+                    
+                    try {
+                        const symbols = documentSymbolsCache.get(document.uri.toString());
+                        if (symbols) {
+                            // --- THIS IS THE FIX ---
+                            // 1. Destructure the returned array into its parts.
+                            const [opcode, additionalWords] = buildOpcodeFromLine(line.text, symbols);
+
+                            // 2. Use the 'opcode' variable (which is a number) to build the string.
+                            let hexOpcode = `0x${opcode.toString(16).toUpperCase().padStart(4, '0')}`;
+
+                            // 3. (Bonus) Also display any extra data words for immediate values.
+                            if (additionalWords.length > 0) {
+                                hexOpcode += ' ' + additionalWords.map(w => `0x${(w & 0xFFFF).toString(16).toUpperCase().padStart(4, '0')}`).join(' ');
+                            }
+                            
+                            content.appendMarkdown(`\n\n**Calculated Opcode:** \`${hexOpcode}\``);
+                        }
+                    } catch (e) {
+                        // Silently fail
+                    }
+
+                    return new vscode.Hover(content, line.range);
+                }
+
+                // Fallback to word-based hovering for registers and symbols
                 const range = document.getWordRangeAtPosition(position);
                 if (!range) return null;
                 const word = document.getText(range).toUpperCase();
                 
-                if (INSTRUCTION_RULES.has(word)) {
-                    const rule = INSTRUCTION_RULES.get(word)!;
-                    const content = new vscode.MarkdownString(`**${word}**\n\n*${rule.syntax}*\n\n${rule.description}`);
-                    
-                    if (rule.flagsAffected) {
-                        content.appendMarkdown(`\n\n**Flags Affected:** ${rule.flagsAffected}`);
-                    }
-                    
-                    content.appendCodeblock(rule.opcode, 'plaintext');
-                    return new vscode.Hover(content, range);
-                }
-
                 if (TMS34010_REGISTERS.has(word)) {
                      const content = new vscode.MarkdownString(`**Register:** ${word}`);
                      return new vscode.Hover(content, range);
@@ -339,8 +443,7 @@ export function activate(context: vscode.ExtensionContext) {
             }
         })
     );
-
-    // Definition
+    // Provide Definition
     context.subscriptions.push(
         vscode.languages.registerDefinitionProvider('tms-assembly', {
             provideDefinition(document, position, token): vscode.ProviderResult<vscode.Definition> {
@@ -387,12 +490,10 @@ export function activate(context: vscode.ExtensionContext) {
             }
         })
     );
-    
-    // Signature Helper
+    // Signature Help
     context.subscriptions.push(
         vscode.languages.registerSignatureHelpProvider('tms-assembly', {
             provideSignatureHelp(document, position, token, context) {
-                // Get the text on the line up to the cursor
                 const line = document.lineAt(position).text.substring(0, position.character);
                 const parts = line.trim().split(/[\s,]+/);
 
@@ -401,50 +502,38 @@ export function activate(context: vscode.ExtensionContext) {
                 }
 
                 const mnemonic = parts[0].toUpperCase();
-                // Check if we are typing a known instruction
                 if (!INSTRUCTION_RULES.has(mnemonic)) {
                     return undefined;
                 }
 
-                // Get the instruction's rule from our database
                 const rule = INSTRUCTION_RULES.get(mnemonic)!;
-
-                // The active parameter is determined by the number of commas typed
                 const activeParameter = (line.match(/,/g) || []).length;
 
-                // If we've already typed more operands than the instruction takes, do nothing
                 if (activeParameter >= rule.operands.length) {
                     return undefined;
                 }
 
-                // Create the signature information object
                 const signature = new vscode.SignatureInformation(rule.syntax, new vscode.MarkdownString(rule.description));
                 
-                // Parse the parameters from the syntax string to display them
                 const operandStr = rule.syntax.substring(mnemonic.length).trim();
                 const paramLabels = operandStr.split(',').map(p => p.trim());
                 signature.parameters = paramLabels.map(label => new vscode.ParameterInformation(label));
                 
-                // Assemble the final help object
                 const signatureHelp = new vscode.SignatureHelp();
                 signatureHelp.signatures = [signature];
                 signatureHelp.activeSignature = 0;
-                signatureHelp.activeParameter = activeParameter; // This tells VS Code which parameter to bold
+                signatureHelp.activeParameter = activeParameter;
 
                 return signatureHelp;
             }
-        }, ' ', ',') // Trigger on space and comma
+        }, ' ', ',')
     );
-
-    // Formatter
+    // Document Formatting
     context.subscriptions.push(
         vscode.languages.registerDocumentFormattingEditProvider('tms-assembly', {
             provideDocumentFormattingEdits(document: vscode.TextDocument): vscode.TextEdit[] {
                 const edits: vscode.TextEdit[] = [];
                 const formattedLines: string[] = [];
-
-                // --- Define column start positions ---
-                // (These can be adjusted to your preference)
                 const mnemonicCol = 16;
                 const operandCol = 28;
                 const commentCol = 48;
@@ -452,7 +541,6 @@ export function activate(context: vscode.ExtensionContext) {
                 for (let i = 0; i < document.lineCount; i++) {
                     const line = document.lineAt(i);
 
-                    // If the line is empty or just whitespace, keep it as is.
                     if (line.isEmptyOrWhitespace) {
                         formattedLines.push('');
                         continue;
@@ -461,7 +549,6 @@ export function activate(context: vscode.ExtensionContext) {
                     const text = line.text;
                     const trimmedText = text.trim();
 
-                    // Preserve full-line comments without reformatting their content
                     if (trimmedText.startsWith(';') || trimmedText.startsWith('*')) {
                         formattedLines.push(text);
                         continue;
@@ -472,19 +559,16 @@ export function activate(context: vscode.ExtensionContext) {
                     let operands: string | undefined;
                     let comment: string | undefined;
 
-                    // 1. Extract the comment
                     const commentIndex = text.indexOf(';');
                     if (commentIndex !== -1) {
                         comment = text.substring(commentIndex);
                     }
                     const codePart = (commentIndex !== -1 ? text.substring(0, commentIndex) : text).trim();
                     
-                    // 2. Parse the code part
-                    const parts = codePart.split(/\s+/).filter(p => p); // Split by whitespace and remove empty parts
+                    const parts = codePart.split(/\s+/).filter(p => p);
                     
                     if (parts.length > 0) {
                         const firstWord = parts[0];
-                        // To distinguish labels from mnemonics, we check against our known instructions/directives
                         if (firstWord.endsWith(':') || (!KNOWN_INSTRUCTIONS.has(firstWord.toUpperCase()) && !KNOWN_DIRECTIVES.has(firstWord.toLowerCase()))) {
                             label = parts.shift();
                         }
@@ -497,14 +581,12 @@ export function activate(context: vscode.ExtensionContext) {
                         }
                     }
 
-                    // 3. Rebuild the line with padding
                     let builtLine = '';
                     if (label) {
                         builtLine += label;
                     }
 
                     if (mnemonic) {
-                        // Add padding until we reach the mnemonic column
                         while (builtLine.length < mnemonicCol) {
                             builtLine += ' ';
                         }
@@ -822,29 +904,13 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
             const upperMnemonic = mnemonic.toUpperCase().replace('.', '');
             
             if (upperMnemonic === 'SECT') {
-                if (!operandStr.startsWith('"') || !operandStr.endsWith('"')) {
+                const sectOperands = operandStr.split(';')[0].trim();
+                if (!sectOperands.startsWith('"') || !sectOperands.endsWith('"')) {
                     const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
                     diagnostics.push(new vscode.Diagnostic(range, `.sect directive requires a single quoted string operand for the section name.`, vscode.DiagnosticSeverity.Error));
                 }
             } else if (upperMnemonic === 'USECT') {
-                const usectOperands = operandStr.split(',').map(s => s.trim());
-                if (usectOperands.length !== 2) {
-                    const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
-                    diagnostics.push(new vscode.Diagnostic(range, `.usect requires a quoted section name and a size expression.`, vscode.DiagnosticSeverity.Error));
-                    continue;
-                }
-                const [sectionName, size] = usectOperands;
-                const getOperandRange = (operand: string) => {
-                    const index = lineWithoutComment.indexOf(operand);
-                    return new vscode.Range(lineIndex, index, lineIndex, index + operand.length);
-                };
-                if (!sectionName.startsWith('"') || !sectionName.endsWith('"')) {
-                    diagnostics.push(new vscode.Diagnostic(getOperandRange(sectionName), `Section name for .usect must be a quoted string.`, vscode.DiagnosticSeverity.Error));
-                }
-                const sizeResult = evaluateSymbolicExpression(size, definedSymbols);
-                if (sizeResult.value === null) {
-                    diagnostics.push(new vscode.Diagnostic(getOperandRange(size), `Size operand for .usect must be a valid numeric value or expression.`, vscode.DiagnosticSeverity.Error));
-                }
+                // Validation for usect is handled in the symbol parsing pass where context is richer
             } else if (upperMnemonic === 'MMTM' || upperMnemonic === 'MMFM') {
                 const firstCommaIndex = operandStr.indexOf(',');
                 if (firstCommaIndex === -1) {
@@ -1140,7 +1206,6 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
     });
 }
 
-
 function validateRegisterList(listStr: string, lineIndex: number, lineText: string, diagnostics: vscode.Diagnostic[]) {
     const listRange = new vscode.Range(lineIndex, lineText.indexOf(listStr), lineIndex, listStr.length);
     let finalRegs: string[] = [];
@@ -1202,5 +1267,7 @@ function validateRegisterList(listStr: string, lineIndex: number, lineText: stri
         lastIndex = currentIndex;
     }
 }
+
+
 
 export function deactivate() {}
