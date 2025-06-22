@@ -57,8 +57,8 @@ Quickly navigate your codebase using `Ctrl+Click` (or your platform's equivalent
 ### Data Types
 
 * **Decimal**: Standard base-10 numbers (e.g., `10`, `-256`).
-* **Hexadecimal**: Can be written with an `h` suffix or a `>` prefix (e.g., `40h`, `>40`).
-* **Binary**: Written with a `b` prefix (e.g., `b10101010`).
+* **Hexadecimal**: Can be written with an `h` suffix or a `>` prefix (e.g., `40h`, `>40`, `0x40`).
+* **Binary**: Written with a `b` suffix (e.g., `10101010b`).
 
 ### Directives
 

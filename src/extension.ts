@@ -184,6 +184,7 @@ function debounce<F extends (...args: any[]) => any>(func: F, waitFor: number) {
 export function activate(context: vscode.ExtensionContext) {
     const debouncedUpdateDiagnostics = debounce(updateDiagnostics, 300);
     
+    // autocomplete
     context.subscriptions.push(
         vscode.languages.registerCompletionItemProvider('tms-assembly', {
             provideCompletionItems(document, position, token, context) {
@@ -272,6 +273,7 @@ export function activate(context: vscode.ExtensionContext) {
         }, ' ', ',', '*', '.', '@')
     );
     
+    // Hover
     context.subscriptions.push(
         vscode.languages.registerHoverProvider('tms-assembly', {
             provideHover(document, position, token) {
@@ -338,6 +340,7 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
+    // Definition
     context.subscriptions.push(
         vscode.languages.registerDefinitionProvider('tms-assembly', {
             provideDefinition(document, position, token): vscode.ProviderResult<vscode.Definition> {
@@ -385,6 +388,54 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
     
+    // Signature Helper
+    context.subscriptions.push(
+        vscode.languages.registerSignatureHelpProvider('tms-assembly', {
+            provideSignatureHelp(document, position, token, context) {
+                // Get the text on the line up to the cursor
+                const line = document.lineAt(position).text.substring(0, position.character);
+                const parts = line.trim().split(/[\s,]+/);
+
+                if (parts.length < 1) {
+                    return undefined;
+                }
+
+                const mnemonic = parts[0].toUpperCase();
+                // Check if we are typing a known instruction
+                if (!INSTRUCTION_RULES.has(mnemonic)) {
+                    return undefined;
+                }
+
+                // Get the instruction's rule from our database
+                const rule = INSTRUCTION_RULES.get(mnemonic)!;
+
+                // The active parameter is determined by the number of commas typed
+                const activeParameter = (line.match(/,/g) || []).length;
+
+                // If we've already typed more operands than the instruction takes, do nothing
+                if (activeParameter >= rule.operands.length) {
+                    return undefined;
+                }
+
+                // Create the signature information object
+                const signature = new vscode.SignatureInformation(rule.syntax, new vscode.MarkdownString(rule.description));
+                
+                // Parse the parameters from the syntax string to display them
+                const operandStr = rule.syntax.substring(mnemonic.length).trim();
+                const paramLabels = operandStr.split(',').map(p => p.trim());
+                signature.parameters = paramLabels.map(label => new vscode.ParameterInformation(label));
+                
+                // Assemble the final help object
+                const signatureHelp = new vscode.SignatureHelp();
+                signatureHelp.signatures = [signature];
+                signatureHelp.activeSignature = 0;
+                signatureHelp.activeParameter = activeParameter; // This tells VS Code which parameter to bold
+
+                return signatureHelp;
+            }
+        }, ' ', ',') // Trigger on space and comma
+    );
+
     if (vscode.window.activeTextEditor) {
         updateDiagnostics(vscode.window.activeTextEditor.document, DIAGNOSTIC_COLLECTION);
     }
