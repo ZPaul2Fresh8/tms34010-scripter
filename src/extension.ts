@@ -436,6 +436,109 @@ export function activate(context: vscode.ExtensionContext) {
         }, ' ', ',') // Trigger on space and comma
     );
 
+    // Formatter
+    context.subscriptions.push(
+        vscode.languages.registerDocumentFormattingEditProvider('tms-assembly', {
+            provideDocumentFormattingEdits(document: vscode.TextDocument): vscode.TextEdit[] {
+                const edits: vscode.TextEdit[] = [];
+                const formattedLines: string[] = [];
+
+                // --- Define column start positions ---
+                // (These can be adjusted to your preference)
+                const mnemonicCol = 16;
+                const operandCol = 28;
+                const commentCol = 48;
+
+                for (let i = 0; i < document.lineCount; i++) {
+                    const line = document.lineAt(i);
+
+                    // If the line is empty or just whitespace, keep it as is.
+                    if (line.isEmptyOrWhitespace) {
+                        formattedLines.push('');
+                        continue;
+                    }
+
+                    const text = line.text;
+                    const trimmedText = text.trim();
+
+                    // Preserve full-line comments without reformatting their content
+                    if (trimmedText.startsWith(';') || trimmedText.startsWith('*')) {
+                        formattedLines.push(text);
+                        continue;
+                    }
+                    
+                    let label: string | undefined;
+                    let mnemonic: string | undefined;
+                    let operands: string | undefined;
+                    let comment: string | undefined;
+
+                    // 1. Extract the comment
+                    const commentIndex = text.indexOf(';');
+                    if (commentIndex !== -1) {
+                        comment = text.substring(commentIndex);
+                    }
+                    const codePart = (commentIndex !== -1 ? text.substring(0, commentIndex) : text).trim();
+                    
+                    // 2. Parse the code part
+                    const parts = codePart.split(/\s+/).filter(p => p); // Split by whitespace and remove empty parts
+                    
+                    if (parts.length > 0) {
+                        const firstWord = parts[0];
+                        // To distinguish labels from mnemonics, we check against our known instructions/directives
+                        if (firstWord.endsWith(':') || (!KNOWN_INSTRUCTIONS.has(firstWord.toUpperCase()) && !KNOWN_DIRECTIVES.has(firstWord.toLowerCase()))) {
+                            label = parts.shift();
+                        }
+                        
+                        if (parts.length > 0) {
+                            mnemonic = parts.shift();
+                        }
+                        if (parts.length > 0) {
+                            operands = parts.join(' ');
+                        }
+                    }
+
+                    // 3. Rebuild the line with padding
+                    let builtLine = '';
+                    if (label) {
+                        builtLine += label;
+                    }
+
+                    if (mnemonic) {
+                        // Add padding until we reach the mnemonic column
+                        while (builtLine.length < mnemonicCol) {
+                            builtLine += ' ';
+                        }
+                        builtLine += mnemonic;
+                    }
+
+                    if (operands) {
+                        while (builtLine.length < operandCol) {
+                            builtLine += ' ';
+                        }
+                        builtLine += operands;
+                    }
+
+                    if (comment) {
+                        while (builtLine.length < commentCol) {
+                            builtLine += ' ';
+                        }
+                        builtLine += comment;
+                    }
+
+                    formattedLines.push(builtLine.trimEnd());
+                }
+
+                const fullRange = new vscode.Range(
+                    document.positionAt(0),
+                    document.positionAt(document.getText().length)
+                );
+                
+                edits.push(vscode.TextEdit.replace(fullRange, formattedLines.join('\n')));
+                return edits;
+            }
+        })
+    );
+
     if (vscode.window.activeTextEditor) {
         updateDiagnostics(vscode.window.activeTextEditor.document, DIAGNOSTIC_COLLECTION);
     }
