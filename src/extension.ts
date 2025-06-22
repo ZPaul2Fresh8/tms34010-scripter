@@ -185,21 +185,32 @@ export function activate(context: vscode.ExtensionContext) {
     const debouncedUpdateDiagnostics = debounce(updateDiagnostics, 300);
     
     context.subscriptions.push(
-        // The call to registerCompletionItemProvider is modified
         vscode.languages.registerCompletionItemProvider('tms-assembly', {
             provideCompletionItems(document, position, token, context) {
-                // --- NEW LOGIC START ---
-                // If the trigger was the user typing a period, provide directive completions.
+                if (context.triggerCharacter === '@') {
+                    const symbols = documentSymbolsCache.get(document.uri.toString());
+                    if (!symbols) return [];
+
+                    const replacementRange = new vscode.Range(position.line, position.character - 1, position.line, position.character);
+
+                    const labelSuggestions: vscode.CompletionItem[] = [];
+                    for (const [name, info] of symbols.entries()) {
+                        if (info.type === 'label') {
+                            const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Reference);
+                            item.range = replacementRange;
+                            labelSuggestions.push(item);
+                        }
+                    }
+                    return labelSuggestions;
+                }
+                
                 if (context.triggerCharacter === '.') {
-                    // Provide suggestions from the list of known directives
                     return Array.from(KNOWN_DIRECTIVES).map(dir => {
-                        // Clean the leading period if it exists, so we don't get '..sect'
                         const cleanDir = dir.startsWith('.') ? dir.substring(1) : dir;
                         return new vscode.CompletionItem(cleanDir, vscode.CompletionItemKind.Keyword);
                     });
                 }
-                // --- NEW LOGIC END ---
-
+                
                 const line = document.lineAt(position);
                 const linePrefix = line.text.substr(0, position.character);
                 const trimmedPrefix = linePrefix.trimLeft();
@@ -211,25 +222,6 @@ export function activate(context: vscode.ExtensionContext) {
                 const parts = trimmedPrefix.split(/[\s,]+/);
                 const mnemonic = parts[0].toUpperCase().replace('.', '');
                 
-                if (mnemonic === 'BYTE') {
-                    const createLabelSuggestions = () => {
-                        const symbols = documentSymbolsCache.get(document.uri.toString());
-                        if (!symbols) return [];
-                        return Array.from(symbols.entries()).map(([name, info]) => {
-                            let kind: vscode.CompletionItemKind;
-                            switch (info.type) {
-                                case 'label': case 'bss': case 'global': kind = vscode.CompletionItemKind.Reference; break;
-                                case 'equ': case 'set': kind = vscode.CompletionItemKind.Constant; break;
-                                default: kind = vscode.CompletionItemKind.Variable;
-                            }
-                            const item = new vscode.CompletionItem(name, kind);
-                            if (info.value) item.detail = `(equates to: ${info.value})`;
-                            return item;
-                        });
-                    };
-                    return createLabelSuggestions();
-                }
-
                 if (INSTRUCTION_RULES.has(mnemonic)) {
                     const rule = INSTRUCTION_RULES.get(mnemonic)!;
                     const commaCount = (linePrefix.match(/,/g) || []).length;
@@ -277,7 +269,7 @@ export function activate(context: vscode.ExtensionContext) {
                 
                 return undefined;
             }
-        }, ' ', ',', '*', '.' /* --- MODIFIED: Added '.' as a trigger character --- */)
+        }, ' ', ',', '*', '.', '@')
     );
     
     context.subscriptions.push(
@@ -405,7 +397,6 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(doc => DIAGNOSTIC_COLLECTION.delete(doc.uri)));
 }
 
-// --- MODIFIED: The check now includes 'equ' and 'set' ---
 function defineSymbol(
     name: string,
     type: 'label' | 'equ' | 'set' | 'bss' | 'global',
@@ -421,7 +412,6 @@ function defineSymbol(
     const existingSymbol = definedSymbols.get(name);
 
     if (existingSymbol) {
-        // A .global declaration can be fulfilled by a label, bss, equ, or set definition.
         if (existingSymbol.type === 'global' && (type === 'label' || type === 'bss' || type === 'equ' || type === 'set')) {
             const newInfo: SymbolInfo = {
                 uri,
@@ -466,7 +456,7 @@ async function parseSymbols(
 ): Promise<boolean> {
     const uriString = doc.uri.toString();
     if (processedFiles.has(uriString)) {
-        return inConditionalBlock;
+        return inConditionalBlock; 
     }
     processedFiles.add(uriString);
     
@@ -536,7 +526,7 @@ async function parseSymbols(
                 if (!range) continue;
                 
                 const existingSymbol = definedSymbols.get(symbolName);
-                if (existingSymbol && (existingSymbol.type === 'label' || existingSymbol.type === 'bss')) {
+                if (existingSymbol && (existingSymbol.type === 'label' || existingSymbol.type === 'bss' || existingSymbol.type === 'equ' || existingSymbol.type === 'set')) {
                     existingSymbol.declaration = { uri: doc.uri, range };
                 } 
                 else if (!existingSymbol) {
@@ -677,7 +667,31 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
             const operandStr = parts.slice(mnemonicIndex + 1).join(' ').split(';')[0].trim();
             const upperMnemonic = mnemonic.toUpperCase().replace('.', '');
             
-            if (upperMnemonic === 'MMTM' || upperMnemonic === 'MMFM') {
+            if (upperMnemonic === 'SECT') {
+                if (!operandStr.startsWith('"') || !operandStr.endsWith('"')) {
+                    const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
+                    diagnostics.push(new vscode.Diagnostic(range, `.sect directive requires a single quoted string operand for the section name.`, vscode.DiagnosticSeverity.Error));
+                }
+            } else if (upperMnemonic === 'USECT') {
+                const usectOperands = operandStr.split(',').map(s => s.trim());
+                if (usectOperands.length !== 2) {
+                    const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
+                    diagnostics.push(new vscode.Diagnostic(range, `.usect requires a quoted section name and a size expression.`, vscode.DiagnosticSeverity.Error));
+                    continue;
+                }
+                const [sectionName, size] = usectOperands;
+                const getOperandRange = (operand: string) => {
+                    const index = lineWithoutComment.indexOf(operand);
+                    return new vscode.Range(lineIndex, index, lineIndex, index + operand.length);
+                };
+                if (!sectionName.startsWith('"') || !sectionName.endsWith('"')) {
+                    diagnostics.push(new vscode.Diagnostic(getOperandRange(sectionName), `Section name for .usect must be a quoted string.`, vscode.DiagnosticSeverity.Error));
+                }
+                const sizeResult = evaluateSymbolicExpression(size, definedSymbols);
+                if (sizeResult.value === null) {
+                    diagnostics.push(new vscode.Diagnostic(getOperandRange(size), `Size operand for .usect must be a valid numeric value or expression.`, vscode.DiagnosticSeverity.Error));
+                }
+            } else if (upperMnemonic === 'MMTM' || upperMnemonic === 'MMFM') {
                 const firstCommaIndex = operandStr.indexOf(',');
                 if (firstCommaIndex === -1) {
                     const range = new vscode.Range(lineIndex, line.firstNonWhitespaceCharacterIndex, lineIndex, line.text.length);
@@ -782,7 +796,7 @@ async function updateDiagnostics(doc: vscode.TextDocument, collection: vscode.Di
                         case OperandType.Flag: isValid = isFlag(operandValue); break;
                         case OperandType.FillMode: isValid = isFillMode(operandValue); break;
                         case OperandType.PixbltMode: isValid = isPixbltMode(operandValue); break;
-                        case OperandType.RegisterList: isValid = true; break; // Validated by MMTM/MMFM
+                        case OperandType.RegisterList: isValid = true; break; 
                         case OperandType.Label:
                             isValid = checkLabel(operandValue);
                             if (isLabelFormat(operandValue) && !isValid) {
